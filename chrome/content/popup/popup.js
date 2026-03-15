@@ -1,9 +1,9 @@
 /**
- * Video Speed Controller — Popup (UXP/chrome context)
+ * Video Speed Controller — Popup (XUL, UXP/chrome context)
  * Has direct access to Components and XPCOM.
  */
 
-Components.utils.import("chrome://videospeed/modules/VSCPrefs.jsm");
+Components.utils.import("chrome://videospeed-modules/content/VSCPrefs.jsm");
 
 /**
  * Get the main browser window.
@@ -25,15 +25,15 @@ function sendToContent(messageName, data) {
   }
 }
 
-document.addEventListener("DOMContentLoaded", function() {
+window.addEventListener("load", function() {
   loadSettingsAndInitialize();
 
   // Settings button — open options in a new tab
-  document.querySelector("#config").addEventListener("click", function() {
+  document.getElementById("config").addEventListener("command", function() {
     var mainWindow = getMainWindow();
     if (mainWindow && mainWindow.gBrowser) {
       mainWindow.gBrowser.selectedTab = mainWindow.gBrowser.addTab(
-        "chrome://videospeed/content/options/options.html"
+        "chrome://videospeed/content/options/options.xul"
       );
     }
     // Close the popup panel
@@ -42,8 +42,8 @@ document.addEventListener("DOMContentLoaded", function() {
   });
 
   // Power button toggle
-  document.querySelector("#disable").addEventListener("click", function() {
-    var isCurrentlyEnabled = !this.classList.contains("disabled");
+  document.getElementById("disable").addEventListener("command", function() {
+    var isCurrentlyEnabled = this.getAttribute("disabled-state") !== "true";
     toggleEnabled(!isCurrentlyEnabled, settingsSavedReloadMessage);
   });
 
@@ -59,19 +59,25 @@ document.addEventListener("DOMContentLoaded", function() {
   }
 
   function toggleEnabledUI(enabled) {
-    var disableBtn = document.querySelector("#disable");
-    disableBtn.classList.toggle("disabled", !enabled);
-    disableBtn.title = enabled ? "Disable Extension" : "Enable Extension";
+    var disableBtn = document.getElementById("disable");
+    if (enabled) {
+      disableBtn.removeAttribute("disabled-state");
+    } else {
+      disableBtn.setAttribute("disabled-state", "true");
+    }
+    disableBtn.setAttribute("tooltiptext",
+      enabled ? "Disable Extension" : "Enable Extension");
 
     // Update toolbar icon in main window
     var mainWindow = getMainWindow();
     if (mainWindow) {
       var button = mainWindow.document.getElementById("videospeed-button");
       if (button) {
-        var suffix = enabled ? "_disabled" : "_disabled";
-        // When disabled globally, always show gray; when enabled, let overlay.js manage it
-        button.image = "chrome://videospeed/skin/icon19" +
-          (enabled ? "" : "_disabled") + ".png";
+        if (enabled) {
+          button.removeAttribute("status");
+        } else {
+          button.setAttribute("status", "disabled");
+        }
       }
     }
   }
@@ -81,9 +87,9 @@ document.addEventListener("DOMContentLoaded", function() {
   }
 
   function setStatusMessage(str) {
-    var status = document.querySelector("#status");
-    status.classList.toggle("hide", false);
-    status.innerText = str;
+    var status = document.getElementById("status");
+    status.hidden = false;
+    status.setAttribute("value", str);
   }
 
   function loadSettingsAndInitialize() {
@@ -116,47 +122,48 @@ document.addEventListener("DOMContentLoaded", function() {
     }
 
     updateSpeedControlsUI(slowerStep, fasterStep, resetSpeed);
-    initializeSpeedControls(slowerStep, fasterStep);
+    initializeSpeedControls();
   }
 
   function updateSpeedControlsUI(slowerStep, fasterStep, resetSpeed) {
-    var decreaseBtn = document.querySelector("#speed-decrease");
+    var decreaseBtn = document.getElementById("speed-decrease");
     if (decreaseBtn) {
-      decreaseBtn.dataset.delta = -slowerStep;
-      decreaseBtn.querySelector("span").textContent = "-" + slowerStep;
+      decreaseBtn.setAttribute("delta", -slowerStep);
+      decreaseBtn.setAttribute("label", "-" + slowerStep);
     }
 
-    var increaseBtn = document.querySelector("#speed-increase");
+    var increaseBtn = document.getElementById("speed-increase");
     if (increaseBtn) {
-      increaseBtn.dataset.delta = fasterStep;
-      increaseBtn.querySelector("span").textContent = "+" + fasterStep;
+      increaseBtn.setAttribute("delta", fasterStep);
+      increaseBtn.setAttribute("label", "+" + fasterStep);
     }
 
-    var resetBtn = document.querySelector("#speed-reset");
+    var resetBtn = document.getElementById("speed-reset");
     if (resetBtn) {
-      resetBtn.textContent = resetSpeed.toString();
+      resetBtn.setAttribute("label", resetSpeed.toString());
     }
   }
 
   function initializeSpeedControls() {
-    document.querySelector("#speed-decrease").addEventListener("click", function() {
-      var delta = parseFloat(this.dataset.delta);
+    document.getElementById("speed-decrease").addEventListener("command", function() {
+      var delta = parseFloat(this.getAttribute("delta"));
       sendToContent("VSC:AdjustSpeed", { delta: delta });
     });
 
-    document.querySelector("#speed-increase").addEventListener("click", function() {
-      var delta = parseFloat(this.dataset.delta);
+    document.getElementById("speed-increase").addEventListener("command", function() {
+      var delta = parseFloat(this.getAttribute("delta"));
       sendToContent("VSC:AdjustSpeed", { delta: delta });
     });
 
-    document.querySelector("#speed-reset").addEventListener("click", function() {
-      var preferredSpeed = parseFloat(this.textContent);
+    document.getElementById("speed-reset").addEventListener("command", function() {
+      var preferredSpeed = parseFloat(this.getAttribute("label"));
       sendToContent("VSC:SetSpeed", { speed: preferredSpeed });
     });
 
-    document.querySelectorAll(".preset-btn").forEach(function(btn) {
-      btn.addEventListener("click", function() {
-        var speed = parseFloat(this.dataset.speed);
+    var presetBtns = document.querySelectorAll(".preset-btn");
+    Array.prototype.forEach.call(presetBtns, function(btn) {
+      btn.addEventListener("command", function() {
+        var speed = parseFloat(this.getAttribute("speed"));
         sendToContent("VSC:SetSpeed", { speed: speed });
       });
     });

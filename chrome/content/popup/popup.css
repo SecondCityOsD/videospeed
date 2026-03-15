@@ -1,349 +1,140 @@
-/* Material Design Variables */
-:root {
-  /* Light theme */
-  --md-surface: #ffffff;
-  --md-surface-variant: #f3f3f3;
-  --md-surface-container: #fafafa;
-  --md-on-surface: #1c1b1f;
-  --md-on-surface-variant: #49454f;
-  --md-primary: #6750a4;
-  --md-primary-container: #eaddff;
-  --md-on-primary: #ffffff;
-  --md-on-primary-container: #21005d;
-  --md-outline: #79747e;
-  --md-outline-variant: #cac4d0;
-  --md-shadow: rgba(0, 0, 0, 0.1);
-  --md-shadow-2: rgba(0, 0, 0, 0.15);
-  --md-shadow-3: rgba(0, 0, 0, 0.2);
+/* Video Speed Controller — Popup (Material Design styling for XUL) */
 
-  /* Power button states */
-  --power-enabled: #34a853;
-  --power-disabled: #ea4335;
-  --power-enabled-bg: rgba(52, 168, 83, 0.08);
-  --power-disabled-bg: rgba(234, 67, 53, 0.08);
+/* Base window styling */
+window {
+  background-color: #ffffff;
+  font-family: 'Segoe UI', 'Roboto', -apple-system, sans-serif;
+  font-size: 13px;
+  -moz-appearance: none;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    /* Dark theme */
-    --md-surface: #131316;
-    --md-surface-variant: #2b2930;
-    --md-surface-container: #1f1f23;
-    --md-on-surface: #e6e0e9;
-    --md-on-surface-variant: #cac4cf;
-    --md-primary: #d0bcff;
-    --md-primary-container: #4f378b;
-    --md-on-primary: #371e73;
-    --md-on-primary-container: #eaddff;
-    --md-outline: #938f99;
-    --md-outline-variant: #49454f;
-    --md-shadow: rgba(0, 0, 0, 0.3);
-    --md-shadow-2: rgba(0, 0, 0, 0.4);
-    --md-shadow-3: rgba(0, 0, 0, 0.5);
-
-    /* Power button states for dark mode */
-    --power-enabled: #5bb974;
-    --power-disabled: #f28b82;
-    --power-enabled-bg: rgba(91, 185, 116, 0.12);
-    --power-disabled-bg: rgba(242, 139, 130, 0.12);
-  }
-}
-
-/* Reset and base styles */
-* {
-  box-sizing: border-box;
-  margin: 0;
-  padding: 0;
-}
-
-html,
-body {
-  font-family: 'Roboto', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  font-size: 14px;
-  line-height: 1.4;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-
-body {
-  background-color: var(--md-surface);
-  color: var(--md-on-surface);
-  min-width: 280px;
+#popup-container {
+  padding: 12px 14px 6px 14px;
   width: 280px;
+  background-color: #ffffff;
 }
 
-/* Popup container */
-.popup-container {
-  padding: 0;
-  background-color: var(--md-surface);
-}
-
-/* Footer */
-.footer {
-  background-color: var(--md-surface-container);
-  border-top: 1px solid var(--md-outline-variant);
-}
-
-.footer-content {
-  display: flex;
-  align-items: center;
-  padding: 8px 20px;
-  position: relative;
-}
-
-
-
-.footer-controls {
-  display: flex;
-  gap: 4px;
-  margin-left: auto;
-}
-
-/* Icon buttons */
-.icon-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  border: none;
-  border-radius: 20px;
-  background-color: transparent;
-  color: var(--md-on-surface-variant);
-  cursor: pointer;
-  transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
-  position: relative;
-  overflow: hidden;
-}
-
-.icon-btn:hover {
-  background-color: var(--md-surface-variant);
-  color: var(--md-on-surface);
-}
-
-.icon-btn:active {
-  transform: scale(0.95);
-}
-
-/* Power button specific styles */
-#disable.power-btn {
-  color: var(--power-enabled);
-  background-color: transparent;
-}
-
-#disable.power-btn.disabled {
-  color: var(--power-disabled);
-  background-color: transparent;
-}
-
-#disable.power-btn:hover {
-  background-color: var(--md-surface-variant);
-  color: var(--power-enabled);
-}
-
-#disable.power-btn.disabled:hover {
-  background-color: var(--md-surface-variant);
-  color: var(--power-disabled);
-}
-
-/* Settings button */
-.settings-btn:hover {
-  background-color: var(--md-primary-container);
-  color: var(--md-on-primary-container);
-}
-
-/* Speed section */
-.speed-section {
-  padding: 20px 20px 16px 20px;
-}
-
-/* Speed controls */
-.speed-controls {
-  display: grid;
-  grid-template-columns: 1fr 1fr 1fr;
-  gap: 8px;
-  margin-bottom: 20px;
-}
-
-.control-btn {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 4px;
-  padding: 12px 8px;
-  border: 1px solid var(--md-outline-variant);
+/* ── All buttons: strip XUL chrome, apply Material base ── */
+#popup-container button {
+  -moz-appearance: none;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  border: 1px solid #cac4d0;
   border-radius: 12px;
-  background-color: var(--md-surface-variant);
-  color: var(--md-on-surface);
+  background-color: #f3f3f3;
+  color: #1c1b1f;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+/* ── Speed controls row (-0.1 / reset / +0.1) ── */
+#speed-controls {
+  margin-bottom: 12px;
+}
+
+#speed-controls button {
+  margin: 0 4px;
+  padding: 10px 8px;
   font-size: 12px;
   font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
-  position: relative;
-  overflow: hidden;
 }
 
-.control-btn:hover {
-  background-color: var(--md-primary-container);
-  color: var(--md-on-primary-container);
-  border-color: var(--md-primary);
-  box-shadow: 0 2px 4px var(--md-shadow);
-  transform: translateY(-1px);
+#speed-controls button:hover {
+  background-color: #eaddff;
+  color: #21005d;
+  border-color: #6750a4;
 }
 
-.control-btn:active {
-  transform: translateY(0) scale(0.98);
-  box-shadow: 0 1px 2px var(--md-shadow);
-}
-
-/* Reset button special styling */
+/* Reset button — purple accent */
 .reset-btn {
-  background-color: var(--md-primary);
-  color: var(--md-on-primary);
-  border-color: var(--md-primary);
-  font-size: 14px;
-  font-weight: 600;
+  background-color: #6750a4 !important;
+  color: #ffffff !important;
+  border-color: #6750a4 !important;
+  font-size: 14px !important;
+  font-weight: 600 !important;
 }
 
 .reset-btn:hover {
-  background-color: var(--md-primary);
-  color: var(--md-on-primary);
-  box-shadow: 0 4px 8px var(--md-shadow-2);
-  transform: translateY(-2px);
+  background-color: #7c6aaf !important;
+  color: #ffffff !important;
+  border-color: #6750a4 !important;
+  box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
 }
 
-/* Speed presets */
-.speed-presets {
-  margin-top: 8px;
+/* ── Preset buttons grid ── */
+#speed-presets {
+  margin-top: 4px;
 }
 
-.preset-grid {
-  display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 8px;
+#speed-presets hbox {
+  margin-bottom: 6px;
 }
 
 .preset-btn {
-  padding: 10px 4px;
-  border: 1px solid var(--md-outline-variant);
-  border-radius: 8px;
-  background-color: var(--md-surface-variant);
-  color: var(--md-on-surface);
+  margin: 0 4px;
+  padding: 8px 4px;
   font-size: 12px;
   font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
-  position: relative;
-  overflow: hidden;
+  border-radius: 8px;
 }
 
 .preset-btn:hover {
-  background-color: var(--md-primary-container);
-  color: var(--md-on-primary-container);
-  border-color: var(--md-primary);
-  transform: translateY(-1px);
-  box-shadow: 0 2px 4px var(--md-shadow);
+  background-color: #eaddff;
+  color: #21005d;
+  border-color: #6750a4;
 }
 
-.preset-btn:active {
-  transform: translateY(0) scale(0.95);
-  box-shadow: 0 1px 2px var(--md-shadow);
+/* ── Footer: separator + power/settings ── */
+#footer {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #cac4d0;
 }
 
-/* Active state for preset buttons */
-.preset-btn.active {
-  background-color: var(--md-primary);
-  color: var(--md-on-primary);
-  border-color: var(--md-primary);
-  box-shadow: 0 2px 4px var(--md-shadow);
+/* Power and settings icon buttons */
+.power-btn,
+.settings-btn {
+  -moz-appearance: none;
+  min-width: 32px !important;
+  max-width: 32px;
+  min-height: 32px !important;
+  max-height: 32px;
+  padding: 0 !important;
+  margin: 0 2px !important;
+  border: none !important;
+  border-radius: 16px !important;
+  background: transparent !important;
+  /* Hide the text label — we use list-style-image instead */
+  color: transparent !important;
+  font-size: 0 !important;
+  cursor: pointer;
 }
 
-/* Status */
-.status {
-  padding: 0;
-  background-color: transparent;
-  font-size: 12px;
-  color: var(--md-on-surface-variant);
-  text-align: left;
-  animation: slideIn 0.3s cubic-bezier(0.2, 0, 0, 1);
+.power-btn:hover,
+.settings-btn:hover {
+  background-color: #f3f3f3 !important;
 }
 
-.status.error {
-  background-color: var(--power-disabled-bg);
-  color: var(--power-disabled);
+/* Power button: green SVG icon */
+.power-btn {
+  list-style-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' width='18' height='18'%3E%3Cpath fill='%2334a853' d='M13 3h-2v10h2V3zm4.83 2.17l-1.42 1.42A6.92 6.92 0 0 1 19 12c0 3.87-3.13 7-7 7s-7-3.13-7-7c0-2.27 1.08-4.28 2.59-5.41L6.17 5.17A8.93 8.93 0 0 0 3 12a9 9 0 0 0 18 0c0-2.74-1.23-5.18-3.17-6.83z'/%3E%3C/svg%3E");
 }
 
-.status.success {
-  background-color: var(--power-enabled-bg);
-  color: var(--power-enabled);
+.power-btn[disabled-state="true"] {
+  list-style-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' width='18' height='18'%3E%3Cpath fill='%23ea4335' d='M13 3h-2v10h2V3zm4.83 2.17l-1.42 1.42A6.92 6.92 0 0 1 19 12c0 3.87-3.13 7-7 7s-7-3.13-7-7c0-2.27 1.08-4.28 2.59-5.41L6.17 5.17A8.93 8.93 0 0 0 3 12a9 9 0 0 0 18 0c0-2.74-1.23-5.18-3.17-6.83z'/%3E%3C/svg%3E");
 }
 
-/* Hide utility */
-.hide {
-  display: none !important;
+/* Settings button: dark gray gear SVG icon */
+.settings-btn {
+  list-style-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' width='18' height='18'%3E%3Cpath fill='%2349454f' d='M12,15.5A3.5,3.5 0 0,1 8.5,12A3.5,3.5 0 0,1 12,8.5A3.5,3.5 0 0,1 15.5,12A3.5,3.5 0 0,1 12,15.5M19.43,12.97C19.47,12.65 19.5,12.33 19.5,12C19.5,11.67 19.47,11.34 19.43,11L21.54,9.37C21.73,9.22 21.78,8.95 21.66,8.73L19.66,5.27C19.54,5.05 19.27,4.96 19.05,5.05L16.56,6.05C16.04,5.66 15.5,5.32 14.87,5.07L14.5,2.42C14.46,2.18 14.25,2 14,2H10C9.75,2 9.54,2.18 9.5,2.42L9.13,5.07C8.5,5.32 7.96,5.66 7.44,6.05L4.95,5.05C4.73,4.96 4.46,5.05 4.34,5.27L2.34,8.73C2.22,8.95 2.27,9.22 2.46,9.37L4.57,11C4.53,11.34 4.5,11.67 4.5,12C4.5,12.33 4.53,12.65 4.57,12.97L2.46,14.63C2.27,14.78 2.22,15.05 2.34,15.27L4.34,18.73C4.46,18.95 4.73,19.03 4.95,18.95L7.44,17.94C7.96,18.34 8.5,18.68 9.13,18.93L9.5,21.58C9.54,21.82 9.75,22 10,22H14C14.25,22 14.46,21.82 14.5,21.58L14.87,18.93C15.5,18.68 16.04,18.34 16.56,17.94L19.05,18.95C19.27,19.03 19.54,18.95 19.66,18.73L21.66,15.27C21.78,15.05 21.73,14.78 21.54,14.63L19.43,12.97Z'/%3E%3C/svg%3E");
 }
 
-/* Animations */
-@keyframes slideIn {
-  from {
-    opacity: 0;
-    transform: translateY(-10px);
-  }
-
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+.settings-btn:hover {
+  background-color: #eaddff !important;
 }
 
-/* Ripple effect for buttons */
-.control-btn::before,
-.preset-btn::before,
-.icon-btn::before {
-  content: '';
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 0;
-  height: 0;
-  border-radius: 50%;
-  background-color: currentColor;
-  opacity: 0.1;
-  transform: translate(-50%, -50%);
-  transition: width 0.6s, height 0.6s;
-}
-
-.control-btn:active::before,
-.preset-btn:active::before,
-.icon-btn:active::before {
-  width: 300px;
-  height: 300px;
-}
-
-/* Focus styles for accessibility */
-.control-btn:focus-visible,
-.preset-btn:focus-visible,
-.icon-btn:focus-visible {
-  outline: 2px solid var(--md-primary);
-  outline-offset: 2px;
-}
-
-/* Responsive adjustments */
-@media (max-width: 320px) {
-  body {
-    min-width: 260px;
-    width: 260px;
-  }
-
-  .popup-container {
-    padding: 0;
-  }
-
-  .header {
-    padding: 12px 16px;
-  }
-
-  .speed-section {
-    padding: 16px;
-  }
+/* ── Status label ── */
+#status {
+  font-size: 11px;
+  color: #49454f;
 }

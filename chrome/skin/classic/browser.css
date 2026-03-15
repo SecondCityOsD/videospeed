@@ -1,0 +1,14 @@
+#videospeed-button {
+  list-style-image: url("chrome://videospeed/skin/icon19.png");
+}
+toolbar[iconsize="small"] #videospeed-button {
+  list-style-image: url("chrome://videospeed/skin/icon16.png");
+}
+
+#videospeed-button[status="disabled"] {
+  list-style-image: url("chrome://videospeed/skin/icon19_disabled.png");
+}
+toolbar[iconsize="small"] #videospeed-button[status="disabled"] {
+  list-style-image: url("chrome://videospeed/skin/icon16.png");
+  opacity: 0.5;
+}

@@ -1,0 +1,275 @@
+<?xml version="1.0" encoding="utf-8"?>
+<?xml-stylesheet href="chrome://global/skin/" type="text/css"?>
+<?xml-stylesheet href="chrome://videospeed/content/options/options.css" type="text/css"?>
+
+<page xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+      title="Video Speed Controller: Options"
+      orient="vertical">
+
+  <script type="application/x-javascript" src="options.js"/>
+
+  <scrollbox flex="1" orient="vertical" id="options-scroll">
+  <vbox id="options-container">
+
+    <!-- Header -->
+    <label class="header-title" value="Video Speed Controller"/>
+
+    <!-- Shortcuts Section -->
+    <groupbox id="customs">
+      <caption label="Shortcuts"/>
+
+      <vbox id="shortcut-rows">
+
+        <hbox id="display" class="customs shortcut-row" align="center">
+          <menulist class="customDo">
+            <menupopup>
+              <menuitem label="Show/hide controller" value="display"/>
+            </menupopup>
+          </menulist>
+          <textbox class="customKey" placeholder="press a key" size="8"/>
+          <textbox class="customValue" placeholder="value (0.10)" size="8"/>
+          <menulist class="customForce" hidden="true">
+            <menupopup>
+              <menuitem label="Do not disable website key bindings" value="false"/>
+              <menuitem label="Disable website key bindings" value="true"/>
+            </menupopup>
+          </menulist>
+        </hbox>
+
+        <hbox id="slower" class="customs shortcut-row" align="center">
+          <menulist class="customDo">
+            <menupopup>
+              <menuitem label="Decrease speed" value="slower"/>
+            </menupopup>
+          </menulist>
+          <textbox class="customKey" placeholder="press a key" size="8"/>
+          <textbox class="customValue" placeholder="value (0.10)" size="8"/>
+          <menulist class="customForce" hidden="true">
+            <menupopup>
+              <menuitem label="Do not disable website key bindings" value="false"/>
+              <menuitem label="Disable website key bindings" value="true"/>
+            </menupopup>
+          </menulist>
+        </hbox>
+
+        <hbox id="faster" class="customs shortcut-row" align="center">
+          <menulist class="customDo">
+            <menupopup>
+              <menuitem label="Increase speed" value="faster"/>
+            </menupopup>
+          </menulist>
+          <textbox class="customKey" placeholder="press a key" size="8"/>
+          <textbox class="customValue" placeholder="value (0.10)" size="8"/>
+          <menulist class="customForce" hidden="true">
+            <menupopup>
+              <menuitem label="Do not disable website key bindings" value="false"/>
+              <menuitem label="Disable website key bindings" value="true"/>
+            </menupopup>
+          </menulist>
+        </hbox>
+
+        <hbox id="rewind" class="customs shortcut-row" align="center">
+          <menulist class="customDo">
+            <menupopup>
+              <menuitem label="Rewind" value="rewind"/>
+            </menupopup>
+          </menulist>
+          <textbox class="customKey" placeholder="press a key" size="8"/>
+          <textbox class="customValue" placeholder="value (10)" size="8"/>
+          <menulist class="customForce" hidden="true">
+            <menupopup>
+              <menuitem label="Do not disable website key bindings" value="false"/>
+              <menuitem label="Disable website key bindings" value="true"/>
+            </menupopup>
+          </menulist>
+        </hbox>
+
+        <hbox id="advance" class="customs shortcut-row" align="center">
+          <menulist class="customDo">
+            <menupopup>
+              <menuitem label="Advance" value="advance"/>
+            </menupopup>
+          </menulist>
+          <textbox class="customKey" placeholder="press a key" size="8"/>
+          <textbox class="customValue" placeholder="value (10)" size="8"/>
+          <menulist class="customForce" hidden="true">
+            <menupopup>
+              <menuitem label="Do not disable website key bindings" value="false"/>
+              <menuitem label="Disable website key bindings" value="true"/>
+            </menupopup>
+          </menulist>
+        </hbox>
+
+        <hbox id="reset" class="customs shortcut-row" align="center">
+          <menulist class="customDo">
+            <menupopup>
+              <menuitem label="Reset speed" value="reset"/>
+            </menupopup>
+          </menulist>
+          <textbox class="customKey" placeholder="press a key" size="8"/>
+          <textbox class="customValue" placeholder="value (1.00)" size="8" disabled="true"/>
+          <menulist class="customForce" hidden="true">
+            <menupopup>
+              <menuitem label="Do not disable website key bindings" value="false"/>
+              <menuitem label="Disable website key bindings" value="true"/>
+            </menupopup>
+          </menulist>
+        </hbox>
+
+        <hbox id="fast" class="customs shortcut-row" align="center">
+          <menulist class="customDo">
+            <menupopup>
+              <menuitem label="Preferred speed" value="fast"/>
+            </menupopup>
+          </menulist>
+          <textbox class="customKey" placeholder="press a key" size="8"/>
+          <textbox class="customValue" placeholder="value (1.80)" size="8"/>
+          <menulist class="customForce" hidden="true">
+            <menupopup>
+              <menuitem label="Do not disable website key bindings" value="false"/>
+              <menuitem label="Disable website key bindings" value="true"/>
+            </menupopup>
+          </menulist>
+        </hbox>
+
+        <hbox id="mark" class="customs shortcut-row" align="center">
+          <menulist class="customDo">
+            <menupopup>
+              <menuitem label="Set marker" value="mark"/>
+            </menupopup>
+          </menulist>
+          <textbox class="customKey" placeholder="press a key" size="8"/>
+          <textbox class="customValue" placeholder="value (0)" size="8" disabled="true"/>
+          <menulist class="customForce" hidden="true">
+            <menupopup>
+              <menuitem label="Do not disable website key bindings" value="false"/>
+              <menuitem label="Disable website key bindings" value="true"/>
+            </menupopup>
+          </menulist>
+        </hbox>
+
+        <hbox id="jump" class="customs shortcut-row" align="center">
+          <menulist class="customDo">
+            <menupopup>
+              <menuitem label="Jump to marker" value="jump"/>
+            </menupopup>
+          </menulist>
+          <textbox class="customKey" placeholder="press a key" size="8"/>
+          <textbox class="customValue" placeholder="value (0)" size="8" disabled="true"/>
+          <menulist class="customForce" hidden="true">
+            <menupopup>
+              <menuitem label="Do not disable website key bindings" value="false"/>
+              <menuitem label="Disable website key bindings" value="true"/>
+            </menupopup>
+          </menulist>
+        </hbox>
+
+      </vbox>
+
+      <button id="add" label="Add New"/>
+    </groupbox>
+
+    <!-- Other Settings Section (core options — always visible) -->
+    <groupbox>
+      <caption label="Other"/>
+
+      <checkbox id="audioBoolean" label="Audio support"/>
+      <checkbox id="rememberSpeed" label="Remember playback speed"/>
+      <checkbox id="startHidden" label="Hide controller by default"/>
+
+      <vbox>
+        <checkbox id="forceLastSavedSpeed" label="Force last saved speed"/>
+        <description class="indent">Prevent video players that override VSC speed</description>
+      </vbox>
+    </groupbox>
+
+    <!-- Action Buttons -->
+    <hbox id="action-buttons" align="center">
+      <button id="save" label="Save" class="primary-btn"/>
+      <button id="experimental" label="Show advanced features"/>
+      <spacer flex="1"/>
+      <button id="restore" label="Restore defaults"/>
+    </hbox>
+
+    <label id="status" value=""/>
+
+    <!-- Advanced Settings (hidden by default) -->
+    <vbox id="advanced-settings" hidden="true">
+
+      <groupbox>
+        <caption label="Advanced"/>
+
+        <checkbox id="enabled" label="Enable extension"/>
+
+        <separator class="thin"/>
+
+        <hbox align="center" class="setting-row">
+          <label value="Controller opacity" control="controllerOpacity" class="setting-label"/>
+          <textbox id="controllerOpacity" size="8"/>
+        </hbox>
+
+        <hbox align="center" class="setting-row">
+          <label value="Controller button size" control="controllerButtonSize" class="setting-label"/>
+          <textbox id="controllerButtonSize" size="8"/>
+        </hbox>
+
+        <vbox class="setting-row">
+          <hbox align="center">
+            <label value="Log level" control="logLevel" class="setting-label"/>
+            <menulist id="logLevel">
+              <menupopup>
+                <menuitem label="None" value="1"/>
+                <menuitem label="Error" value="2"/>
+                <menuitem label="Warning" value="3"/>
+                <menuitem label="Info" value="4"/>
+                <menuitem label="Debug" value="5"/>
+                <menuitem label="Verbose" value="6"/>
+              </menupopup>
+            </menulist>
+          </hbox>
+          <description class="indent">Controls the verbosity of debug logging in the browser console</description>
+        </vbox>
+
+        <separator class="thin"/>
+
+        <vbox class="setting-row">
+          <label value="Sites on which extension is disabled (one per line)"/>
+          <description class="indent">Regex is supported. Use literal notation: /(.+)youtube\.com(\/*)$/gi</description>
+          <textbox id="blacklist" multiline="true" rows="10" flex="1"/>
+        </vbox>
+      </groupbox>
+
+      <separator/>
+
+      <!-- Help & Support Section -->
+      <groupbox>
+        <caption label="Help &amp; Support"/>
+        <hbox>
+          <button id="about" label="About Video Speed Controller"/>
+          <button id="feedback" label="Send Feedback"/>
+        </hbox>
+      </groupbox>
+
+      <!-- FAQ -->
+      <vbox id="faq">
+        <label class="faq-heading" value="Extension controls not appearing?"/>
+        <description>
+          This extension is only compatible with HTML5 audio and video. If you
+          don't see the controls showing up, chances are you are viewing Flash
+          content. Most sites will fallback to HTML5 if Flash is not available.
+          You can manually disable Flash plugin in about:addons > Plugins.
+        </description>
+
+        <label class="faq-heading" value="Speed controls not showing for local videos?"/>
+        <description>
+          The extension should work automatically on local files in Pale Moon.
+          If controls don't appear, check the browser console for errors.
+        </description>
+      </vbox>
+
+    </vbox>
+
+  </vbox>
+  </scrollbox>
+
+</page>

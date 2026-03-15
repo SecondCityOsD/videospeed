@@ -1,7 +1,7 @@
 "use strict";
 
 Components.utils.import("resource://gre/modules/Services.jsm");
-Components.utils.import("chrome://videospeed/modules/VSCPrefs.jsm");
+Components.utils.import("chrome://videospeed-modules/content/VSCPrefs.jsm");
 
 var VideoSpeedOverlay = {
 
@@ -12,6 +12,9 @@ var VideoSpeedOverlay = {
    * Initialize the overlay — called once when the browser window loads.
    */
   init: function() {
+    // First-run: ensure toolbar button is placed on the nav-bar
+    this._ensureToolbarButton();
+
     // Load frame script into all current and future tabs
     window.messageManager.loadFrameScript(
       "chrome://videospeed/content/framescript.js", true
@@ -31,6 +34,32 @@ var VideoSpeedOverlay = {
 
     // Set initial icon state
     this.updateIcon(false);
+  },
+
+  /**
+   * On first install, add the toolbar button to the nav-bar so it's visible.
+   */
+  _ensureToolbarButton: function() {
+    // Use a version-stamped pref so we can re-trigger if a previous install was broken
+    var prefBranch = Services.prefs.getBranch("extensions.videospeed.");
+    var tbVersion = 2; // bump this to force re-insertion
+    try {
+      if (prefBranch.getIntPref("toolbarbuttonVersion") >= tbVersion) {
+        return; // Already inserted
+      }
+    } catch(e) {
+      // Pref doesn't exist yet — first run
+    }
+
+    prefBranch.setIntPref("toolbarbuttonVersion", tbVersion);
+
+    var navbar = document.getElementById("nav-bar");
+    if (!navbar) return;
+
+    var newSet = navbar.currentSet + ",videospeed-button";
+    navbar.currentSet = newSet;
+    navbar.setAttribute("currentset", newSet);
+    document.persist("nav-bar", "currentset");
   },
 
   /**
@@ -126,8 +155,11 @@ var VideoSpeedOverlay = {
   updateIcon: function(active) {
     var button = document.getElementById("videospeed-button");
     if (button) {
-      var suffix = active ? "" : "_disabled";
-      button.image = "chrome://videospeed/skin/icon19" + suffix + ".png";
+      if (active) {
+        button.removeAttribute("status");
+      } else {
+        button.setAttribute("status", "disabled");
+      }
     }
   },
 
@@ -170,7 +202,7 @@ var VideoSpeedOverlay = {
    */
   openOptions: function() {
     gBrowser.selectedTab = gBrowser.addTab(
-      "chrome://videospeed/content/options/options.html"
+      "chrome://videospeed/content/options/options.xul"
     );
   }
 };

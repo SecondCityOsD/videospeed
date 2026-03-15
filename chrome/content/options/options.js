@@ -1,9 +1,11 @@
 /**
- * Video Speed Controller — Options page (UXP/chrome context)
+ * Video Speed Controller — Options page (XUL, UXP/chrome context)
  * Has direct access to Components and XPCOM.
  */
 
-Components.utils.import("chrome://videospeed/modules/VSCPrefs.jsm");
+Components.utils.import("chrome://videospeed-modules/content/VSCPrefs.jsm");
+
+var XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
 
 var regStrip = /^[\r\t\f\v ]+|[\r\t\f\v ]+$/gm;
 
@@ -51,36 +53,54 @@ var keyCodeAliases = {
 
 var customActionsNoValues = ["pause", "muted", "mark", "jump", "display"];
 
+/**
+ * Walk up the DOM to find an ancestor (or self) with a given class.
+ * Needed because XUL textbox events may target anonymous inner elements.
+ */
+function findAncestorWithClass(el, className) {
+  while (el && el !== document) {
+    if (el.classList && el.classList.contains(className)) return el;
+    el = el.parentNode;
+  }
+  return null;
+}
+
 function recordKeyPress(e) {
+  var target = findAncestorWithClass(e.target, "customKey") || e.target;
   if (
     (e.keyCode >= 48 && e.keyCode <= 57) ||
     (e.keyCode >= 65 && e.keyCode <= 90) ||
     keyCodeAliases[e.keyCode]
   ) {
-    e.target.value = keyCodeAliases[e.keyCode] || String.fromCharCode(e.keyCode);
-    e.target.keyCode = e.keyCode;
+    target.value = keyCodeAliases[e.keyCode] || String.fromCharCode(e.keyCode);
+    target.keyCode = e.keyCode;
     e.preventDefault();
     e.stopPropagation();
   } else if (e.keyCode === 8) {
-    e.target.value = "";
+    target.value = "";
   } else if (e.keyCode === 27) {
-    e.target.value = "null";
-    e.target.keyCode = null;
+    target.value = "null";
+    target.keyCode = null;
   }
 }
 
 function inputFilterNumbersOnly(e) {
+  var target = findAncestorWithClass(e.target, "customValue") || e.target;
   var char = String.fromCharCode(e.keyCode);
-  if (!/[\d\.]$/.test(char) || !/^\d+(\.\d*)?$/.test(e.target.value + char)) {
+  if (!/[\d\.]$/.test(char) || !/^\d+(\.\d*)?$/.test(target.value + char)) {
     e.preventDefault();
     e.stopPropagation();
   }
 }
 
-function inputFocus(e) { e.target.value = ""; }
+function inputFocus(e) {
+  var target = findAncestorWithClass(e.target, "customKey") || e.target;
+  target.value = "";
+}
 
 function inputBlur(e) {
-  e.target.value = keyCodeAliases[e.target.keyCode] || String.fromCharCode(e.target.keyCode);
+  var target = findAncestorWithClass(e.target, "customKey") || e.target;
+  target.value = keyCodeAliases[target.keyCode] || String.fromCharCode(target.keyCode);
 }
 
 function updateCustomShortcutInputText(inputItem, keyCode) {
@@ -89,37 +109,76 @@ function updateCustomShortcutInputText(inputItem, keyCode) {
 }
 
 function add_shortcut() {
-  var html =
-    '<select class="customDo">' +
-    '<option value="slower">Decrease speed</option>' +
-    '<option value="faster">Increase speed</option>' +
-    '<option value="rewind">Rewind</option>' +
-    '<option value="advance">Advance</option>' +
-    '<option value="reset">Reset speed</option>' +
-    '<option value="fast">Preferred speed</option>' +
-    '<option value="muted">Mute</option>' +
-    '<option value="softer">Decrease volume</option>' +
-    '<option value="louder">Increase volume</option>' +
-    '<option value="pause">Pause</option>' +
-    '<option value="mark">Set marker</option>' +
-    '<option value="jump">Jump to marker</option>' +
-    '<option value="display">Show/hide controller</option>' +
-    '</select>' +
-    '<input class="customKey" type="text" placeholder="press a key"/>' +
-    '<input class="customValue" type="text" placeholder="value (0.10)"/>' +
-    '<select class="customForce">' +
-    '<option value="false">Do not disable website key bindings</option>' +
-    '<option value="true">Disable website key bindings</option>' +
-    '</select>' +
-    '<button class="removeParent">X</button>';
-  var div = document.createElement("div");
-  div.setAttribute("class", "row customs");
-  div.innerHTML = html;
-  var customs_element = document.getElementById("customs");
-  customs_element.insertBefore(
-    div,
-    customs_element.children[customs_element.childElementCount - 1]
-  );
+  var hbox = document.createElementNS(XUL_NS, "hbox");
+  hbox.setAttribute("class", "customs shortcut-row");
+  hbox.setAttribute("align", "center");
+
+  // Action menulist
+  var menulist = document.createElementNS(XUL_NS, "menulist");
+  menulist.setAttribute("class", "customDo");
+  var menupopup = document.createElementNS(XUL_NS, "menupopup");
+  var actions = [
+    { label: "Decrease speed", value: "slower" },
+    { label: "Increase speed", value: "faster" },
+    { label: "Rewind", value: "rewind" },
+    { label: "Advance", value: "advance" },
+    { label: "Reset speed", value: "reset" },
+    { label: "Preferred speed", value: "fast" },
+    { label: "Mute", value: "muted" },
+    { label: "Decrease volume", value: "softer" },
+    { label: "Increase volume", value: "louder" },
+    { label: "Pause", value: "pause" },
+    { label: "Set marker", value: "mark" },
+    { label: "Jump to marker", value: "jump" },
+    { label: "Show/hide controller", value: "display" }
+  ];
+  actions.forEach(function(a) {
+    var item = document.createElementNS(XUL_NS, "menuitem");
+    item.setAttribute("label", a.label);
+    item.setAttribute("value", a.value);
+    menupopup.appendChild(item);
+  });
+  menulist.appendChild(menupopup);
+  hbox.appendChild(menulist);
+
+  // Key textbox
+  var keyBox = document.createElementNS(XUL_NS, "textbox");
+  keyBox.setAttribute("class", "customKey");
+  keyBox.setAttribute("placeholder", "press a key");
+  keyBox.setAttribute("size", "8");
+  hbox.appendChild(keyBox);
+
+  // Value textbox
+  var valBox = document.createElementNS(XUL_NS, "textbox");
+  valBox.setAttribute("class", "customValue");
+  valBox.setAttribute("placeholder", "value (0.10)");
+  valBox.setAttribute("size", "8");
+  hbox.appendChild(valBox);
+
+  // Force menulist (hidden by default)
+  var forceList = document.createElementNS(XUL_NS, "menulist");
+  forceList.setAttribute("class", "customForce");
+  forceList.hidden = true;
+  var forcePop = document.createElementNS(XUL_NS, "menupopup");
+  [
+    { label: "Do not disable website key bindings", value: "false" },
+    { label: "Disable website key bindings", value: "true" }
+  ].forEach(function(a) {
+    var item = document.createElementNS(XUL_NS, "menuitem");
+    item.setAttribute("label", a.label);
+    item.setAttribute("value", a.value);
+    forcePop.appendChild(item);
+  });
+  forceList.appendChild(forcePop);
+  hbox.appendChild(forceList);
+
+  // Remove button
+  var removeBtn = document.createElementNS(XUL_NS, "button");
+  removeBtn.setAttribute("class", "removeParent");
+  removeBtn.setAttribute("label", "X");
+  hbox.appendChild(removeBtn);
+
+  document.getElementById("shortcut-rows").appendChild(hbox);
 }
 
 function createKeyBindings(item) {
@@ -148,7 +207,8 @@ function validate() {
         var regex = parts.slice(1).join("/");
         new RegExp(regex, flags);
       } catch(err) {
-        status.textContent = 'Error: Invalid blacklist regex: "' + match + '". Unable to save.';
+        status.setAttribute("value",
+          'Error: Invalid blacklist regex: "' + match + '". Unable to save.');
         valid = false;
       }
     }
@@ -160,7 +220,8 @@ function save_options() {
   if (validate() === false) return;
 
   keyBindings = [];
-  Array.from(document.querySelectorAll(".customs")).forEach(function(item) {
+  var customs = document.querySelectorAll(".customs");
+  Array.prototype.forEach.call(customs, function(item) {
     createKeyBindings(item);
   });
 
@@ -178,8 +239,8 @@ function save_options() {
   });
 
   var status = document.getElementById("status");
-  status.textContent = "Options saved";
-  setTimeout(function() { status.textContent = ""; }, 1000);
+  status.setAttribute("value", "Options saved");
+  setTimeout(function() { status.setAttribute("value", ""); }, 1000);
 }
 
 function restore_options() {
@@ -220,7 +281,7 @@ function restore_options() {
       document.querySelector("#" + item.action + " .customForce").value = item.force;
     } else {
       add_shortcut();
-      var dom = document.querySelector(".customs:last-of-type");
+      var dom = document.querySelector("#shortcut-rows > .customs:last-child");
       dom.querySelector(".customDo").value = item.action;
       if (customActionsNoValues.indexOf(item.action) !== -1) {
         dom.querySelector(".customValue").disabled = true;
@@ -245,76 +306,118 @@ function restore_defaults() {
     keyBindings: tcDefaults.keyBindings,
     blacklist: tcDefaults.blacklist
   });
-  restore_options();
-  document.querySelectorAll(".removeParent").forEach(function(button) {
-    button.click();
+
+  // Remove dynamically-added shortcuts before restoring
+  var removes = document.querySelectorAll(".removeParent");
+  Array.prototype.forEach.call(removes, function(button) {
+    button.parentNode.parentNode.removeChild(button.parentNode);
   });
+
+  restore_options();
+
   var status = document.getElementById("status");
-  status.textContent = "Default options restored";
-  setTimeout(function() { status.textContent = ""; }, 1000);
+  status.setAttribute("value", "Default options restored");
+  setTimeout(function() { status.setAttribute("value", ""); }, 1000);
 }
 
 function show_experimental() {
-  var forceElements = document.querySelectorAll(".customForce");
   var button = document.getElementById("experimental");
-  if (forceElements.length > 0) {
-    forceElements.forEach(function(item) {
-      item.style.display = "inline-block";
-    });
-    button.textContent = "Experimental features enabled";
-    button.disabled = true;
-  }
+
+  // Show the customForce selects in shortcut rows
+  var forceElements = document.querySelectorAll(".customForce");
+  Array.prototype.forEach.call(forceElements, function(item) {
+    item.hidden = false;
+  });
+
+  // Show the advanced settings container
+  var advanced = document.getElementById("advanced-settings");
+  if (advanced) advanced.hidden = false;
+
+  button.setAttribute("label", "Advanced features enabled");
+  button.disabled = true;
 }
 
-document.addEventListener("DOMContentLoaded", function() {
+window.addEventListener("load", function() {
   restore_options();
 
-  document.getElementById("save").addEventListener("click", save_options);
-  document.getElementById("add").addEventListener("click", add_shortcut);
-  document.getElementById("restore").addEventListener("click", restore_defaults);
-  document.getElementById("experimental").addEventListener("click", show_experimental);
+  document.getElementById("save").addEventListener("command", save_options);
+  document.getElementById("add").addEventListener("command", add_shortcut);
+  document.getElementById("restore").addEventListener("command", restore_defaults);
+  document.getElementById("experimental").addEventListener("command", show_experimental);
 
-  document.getElementById("about").addEventListener("click", function() {
+  function openInTab(url) {
     var mainWindow = Components.classes["@mozilla.org/appshell/window-mediator;1"]
       .getService(Components.interfaces.nsIWindowMediator)
       .getMostRecentWindow("navigator:browser");
     if (mainWindow && mainWindow.gBrowser) {
-      mainWindow.gBrowser.selectedTab = mainWindow.gBrowser.addTab(
-        "https://github.com/igrigorik/videospeed"
-      );
+      mainWindow.gBrowser.selectedTab = mainWindow.gBrowser.addTab(url);
+    }
+  }
+
+  document.getElementById("about").addEventListener("command", function() {
+    openInTab("https://github.com/SecondCityOsD/videospeed");
+  });
+
+  document.getElementById("feedback").addEventListener("command", function() {
+    openInTab("https://github.com/SecondCityOsD/videospeed/issues");
+  });
+
+  // Event delegation for dynamic shortcut rows
+  document.addEventListener("keypress", function(event) {
+    var target = findAncestorWithClass(event.target, "customValue");
+    if (target) {
+      var char = String.fromCharCode(event.keyCode);
+      if (!/[\d\.]$/.test(char) || !/^\d+(\.\d*)?$/.test(target.value + char)) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
     }
   });
 
-  function eventCaller(event, className, funcName) {
-    if (!event.target.classList.contains(className)) return;
-    funcName(event);
-  }
-
-  document.addEventListener("keypress", function(event) {
-    eventCaller(event, "customValue", inputFilterNumbersOnly);
-  });
   document.addEventListener("focus", function(event) {
-    eventCaller(event, "customKey", inputFocus);
+    var target = findAncestorWithClass(event.target, "customKey");
+    if (target) target.value = "";
   }, true);
+
   document.addEventListener("blur", function(event) {
-    eventCaller(event, "customKey", inputBlur);
+    var target = findAncestorWithClass(event.target, "customKey");
+    if (target) {
+      target.value = keyCodeAliases[target.keyCode] || String.fromCharCode(target.keyCode);
+    }
   }, true);
+
   document.addEventListener("keydown", function(event) {
-    eventCaller(event, "customKey", recordKeyPress);
+    var target = findAncestorWithClass(event.target, "customKey");
+    if (target) {
+      recordKeyPress({
+        target: target,
+        keyCode: event.keyCode,
+        preventDefault: function() { event.preventDefault(); },
+        stopPropagation: function() { event.stopPropagation(); }
+      });
+    }
   });
-  document.addEventListener("click", function(event) {
-    eventCaller(event, "removeParent", function() {
-      event.target.parentNode.remove();
-    });
-  });
-  document.addEventListener("change", function(event) {
-    eventCaller(event, "customDo", function() {
-      if (customActionsNoValues.indexOf(event.target.value) !== -1) {
-        event.target.nextElementSibling.nextElementSibling.disabled = true;
-        event.target.nextElementSibling.nextElementSibling.value = 0;
-      } else {
-        event.target.nextElementSibling.nextElementSibling.disabled = false;
+
+  document.addEventListener("command", function(event) {
+    // Remove button clicked
+    if (event.target.classList && event.target.classList.contains("removeParent")) {
+      event.target.parentNode.parentNode.removeChild(event.target.parentNode);
+      return;
+    }
+
+    // Action menulist changed — enable/disable value input
+    var menulist = findAncestorWithClass(event.target, "customDo");
+    if (menulist) {
+      var row = findAncestorWithClass(menulist, "customs");
+      if (row) {
+        var valueBox = row.querySelector(".customValue");
+        if (customActionsNoValues.indexOf(menulist.value) !== -1) {
+          valueBox.disabled = true;
+          valueBox.value = 0;
+        } else {
+          valueBox.disabled = false;
+        }
       }
-    });
+    }
   });
 });

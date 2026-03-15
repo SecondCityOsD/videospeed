@@ -23,12 +23,12 @@ videospeed-uxp/
 │   │   ├── overlay.xul            # Overlays browser.xul (toolbar button + panel)
 │   │   ├── overlay.js             # Chrome-context logic (icon state, frame scripts, messaging)
 │   │   ├── framescript.js         # Content frame script (injects into web pages)
-│   │   ├── popup/                 # Popup panel UI (chrome context)
-│   │   │   ├── popup.html
+│   │   ├── popup/                 # Popup panel UI (XUL, chrome context)
+│   │   │   ├── popup.xul
 │   │   │   ├── popup.css
 │   │   │   └── popup.js
-│   │   └── options/               # Options page (chrome context)
-│   │       ├── options.html
+│   │   └── options/               # Options page (XUL, chrome context)
+│   │       ├── options.xul
 │   │       ├── options.css
 │   │       └── options.js
 │   ├── modules/
@@ -65,7 +65,7 @@ videospeed-uxp/
 | Content injection | `content_scripts` manifest | Frame script + `<script>` tag injection |
 | Storage | `chrome.storage.sync` | `nsIPrefBranch` via `VSCPrefs.jsm` |
 | Controller UI | Shadow DOM | Plain DOM with scoped `.vsc-*` CSS classes |
-| Popup | `chrome.action` popup | `<panel>` with `<iframe>` in overlay |
+| Popup | `chrome.action` popup | `<panel>` with XUL `<iframe>` in overlay |
 | Messaging | `chrome.runtime.sendMessage` | Frame message manager (`sendAsyncMessage`) |
 | URLs | `chrome.runtime.getURL()` | `resource://videospeed/` |
 
@@ -90,12 +90,20 @@ videospeed-uxp/
 
 ### XPI built: `videospeed-uxp-0.9.1.xpi` (140K)
 
+### Session 2: HTML → XUL conversion
+- Converted popup.html → popup.xul (native XUL widgets: button, hbox/vbox, label)
+- Converted options.html → options.xul (groupbox, checkbox, menulist, textbox)
+- Rewrote popup.js and options.js for XUL APIs (command events, setAttribute, createElementNS)
+- Updated overlay.xul and overlay.js references from .html to .xul
+- Removed old HTML files
+- XPI rebuilt: videospeed-uxp-0.9.1.xpi (140K)
+
 ### Immediate next steps
 1. **Test in Pale Moon** — install XPI, open a page with video (YouTube, etc.)
 2. Check browser console for errors on load
 3. Verify controller overlay appears on video elements
-4. Test popup panel (toolbar button click)
-5. Test options page
+4. Test popup panel (toolbar button click) — now native XUL
+5. Test options page — now native XUL with groupbox/checkbox/menulist widgets
 6. Test keyboard shortcuts (S/D for speed, Z/X for seek, V to show/hide)
 
 ### Known risks to watch for during testing
