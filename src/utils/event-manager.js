@@ -215,15 +215,10 @@ class EventManager {
     window.VSC.logger.debug('Storing lastSpeed in settings for the rememberSpeed feature');
     this.config.settings.lastSpeed = speed;
 
-    // Save to Chrome storage if available
-    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.sync) {
-      window.VSC.logger.debug('Syncing chrome settings for lastSpeed');
-      chrome.storage.sync.set({ lastSpeed: speed }, () => {
-        window.VSC.logger.debug(`Speed setting saved: ${speed}`);
-      });
-    } else {
-      window.VSC.logger.debug('Chrome storage not available, skipping speed sync');
-    }
+    // Save lastSpeed via StorageManager (dispatches VSC_SAVE_SETTINGS event)
+    window.VSC.StorageManager.set({ lastSpeed: speed }).then(function() {
+      window.VSC.logger.debug('Speed setting saved: ' + speed);
+    });
 
     // Show controller briefly if hidden
     this.actionHandler.runAction('blink', null, null);

@@ -8,12 +8,20 @@
 window.VSC = window.VSC || {};
 window.VSC.Constants = {};
 
+// Polyfill requestIdleCallback for engines that lack it (Pale Moon safety net)
+if (typeof window.requestIdleCallback === 'undefined') {
+  window.requestIdleCallback = function(cb, opts) {
+    return setTimeout(cb, (opts && opts.timeout) ? Math.min(opts.timeout, 50) : 1);
+  };
+  window.cancelIdleCallback = function(id) { clearTimeout(id); };
+}
+
 // Add debug info to DOM for inspection
-const debugDiv = document.createElement('div');
+var debugDiv = document.createElement('div');
 debugDiv.id = 'vsc-constants-loaded';
 debugDiv.style.display = 'none';
-debugDiv.textContent = `Constants loaded at ${new Date().toISOString()}`;
-document.head.appendChild(debugDiv);
+debugDiv.textContent = 'Constants loaded at ' + new Date().toISOString();
+(document.head || document.documentElement).appendChild(debugDiv);
 
 // Define constants directly first for ES6 exports
 const regStrip = /^[\r\t\f\v ]+|[\r\t\f\v ]+$/gm;

@@ -17,13 +17,10 @@ class VideoSpeedConfig {
    */
   async load() {
     try {
-      // In injected context, wait for user settings to be available
-      const isInjectedContext = typeof chrome === 'undefined' || !chrome.storage;
-      const storage = isInjectedContext
-        ? await window.VSC.StorageManager.waitForInjectedSettings(
-            window.VSC.Constants.DEFAULT_SETTINGS
-          )
-        : await window.VSC.StorageManager.get(window.VSC.Constants.DEFAULT_SETTINGS);
+      // In UXP, we always wait for injected settings from the frame script
+      const storage = await window.VSC.StorageManager.waitForInjectedSettings(
+        window.VSC.Constants.DEFAULT_SETTINGS
+      );
 
       // Handle key bindings migration/initialization
       this.settings.keyBindings = storage.keyBindings || [];

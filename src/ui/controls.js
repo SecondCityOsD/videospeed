@@ -1,5 +1,5 @@
 /**
- * Control button interactions and event handling
+ * Control button interactions and event handling — UXP version (plain DOM)
  * Modular architecture using global variables
  */
 
@@ -12,29 +12,25 @@ class ControlsManager {
   }
 
   /**
-   * Set up control button event listeners
-   * @param {ShadowRoot} shadow - Shadow root containing controls
+   * Set up control button event listeners.
+   * @param {HTMLElement} container - The controller inner container
    * @param {HTMLVideoElement} video - Associated video element
    */
-  setupControlEvents(shadow, video) {
-    this.setupDragHandler(shadow);
-    this.setupButtonHandlers(shadow);
-    this.setupWheelHandler(shadow, video);
-    this.setupClickPrevention(shadow);
+  setupControlEvents(container, video) {
+    this.setupDragHandler(container);
+    this.setupButtonHandlers(container);
+    this.setupWheelHandler(container, video);
+    this.setupClickPrevention(container);
   }
 
-  /**
-   * Set up drag handler for speed indicator
-   * @param {ShadowRoot} shadow - Shadow root
-   * @private
-   */
-  setupDragHandler(shadow) {
-    const draggable = shadow.querySelector('.draggable');
+  setupDragHandler(container) {
+    var draggable = container.querySelector('.vsc-draggable');
+    var self = this;
 
     draggable.addEventListener(
       'mousedown',
-      (e) => {
-        this.actionHandler.runAction(e.target.dataset['action'], false, e);
+      function(e) {
+        self.actionHandler.runAction(e.target.dataset['action'], false, e);
         e.stopPropagation();
         e.preventDefault();
       },
@@ -42,20 +38,15 @@ class ControlsManager {
     );
   }
 
-  /**
-   * Set up button click handlers
-   * @param {ShadowRoot} shadow - Shadow root
-   * @private
-   */
-  setupButtonHandlers(shadow) {
-    shadow.querySelectorAll('button').forEach((button) => {
-      // Click handler
+  setupButtonHandlers(container) {
+    var self = this;
+    container.querySelectorAll('.vsc-btn').forEach(function(button) {
       button.addEventListener(
         'click',
-        (e) => {
-          this.actionHandler.runAction(
+        function(e) {
+          self.actionHandler.runAction(
             e.target.dataset['action'],
-            this.config.getKeyBinding(e.target.dataset['action']),
+            self.config.getKeyBinding(e.target.dataset['action']),
             e
           );
           e.stopPropagation();
@@ -63,67 +54,45 @@ class ControlsManager {
         true
       );
 
-      // Touch handler to prevent conflicts
       button.addEventListener(
         'touchstart',
-        (e) => {
-          e.stopPropagation();
-        },
+        function(e) { e.stopPropagation(); },
         true
       );
     });
   }
 
-  /**
-   * Set up mouse wheel handler for speed control
-   * @param {ShadowRoot} shadow - Shadow root
-   * @param {HTMLVideoElement} video - Video element
-   * @private
-   */
-  setupWheelHandler(shadow, video) {
-    const controller = shadow.querySelector('#controller');
+  setupWheelHandler(container, video) {
+    var controller = container.querySelector('.vsc-ctrl');
 
     controller.addEventListener(
       'wheel',
-      (event) => {
+      function(event) {
         event.preventDefault();
-
-        const delta = Math.sign(event.deltaY);
-        const step = 0.1;
-
-        let newSpeed = video.playbackRate + (delta < 0 ? step : -step);
+        var delta = Math.sign(event.deltaY);
+        var step = 0.1;
+        var newSpeed = video.playbackRate + (delta < 0 ? step : -step);
         newSpeed = Math.min(
           Math.max(newSpeed, window.VSC.Constants.SPEED_LIMITS.MIN),
           window.VSC.Constants.SPEED_LIMITS.MAX
         );
-
         video.playbackRate = newSpeed;
 
-        // Update visual speed display
-        const speedIndicator = shadow.querySelector('.draggable');
+        var speedIndicator = container.querySelector('.vsc-draggable');
         if (speedIndicator) {
           speedIndicator.textContent = newSpeed.toFixed(2);
         }
-
-        window.VSC.logger.debug(`Wheel control: speed changed to ${newSpeed.toFixed(2)}`);
+        window.VSC.logger.debug('Wheel control: speed changed to ' + newSpeed.toFixed(2));
       },
       { passive: false }
     );
   }
 
-  /**
-   * Set up click prevention for controller container
-   * @param {ShadowRoot} shadow - Shadow root
-   * @private
-   */
-  setupClickPrevention(shadow) {
-    const controller = shadow.querySelector('#controller');
-
-    // Prevent clicks from bubbling up to page
-    controller.addEventListener('click', (e) => e.stopPropagation(), false);
-    controller.addEventListener('mousedown', (e) => e.stopPropagation(), false);
+  setupClickPrevention(container) {
+    var controller = container.querySelector('.vsc-ctrl');
+    controller.addEventListener('click', function(e) { e.stopPropagation(); }, false);
+    controller.addEventListener('mousedown', function(e) { e.stopPropagation(); }, false);
   }
 }
 
-// Create singleton instance
 window.VSC.ControlsManager = ControlsManager;

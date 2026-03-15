@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!DOCTYPE overlay>
+
+<overlay id="videospeed-overlay"
+         xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul">
+
+  <script type="application/x-javascript"
+          src="chrome://videospeed/content/overlay.js" />
+
+  <!-- Toolbar button -->
+  <toolbarpalette id="BrowserToolbarPalette">
+    <toolbarbutton id="videospeed-button"
+                   class="toolbarbutton-1 chromeclass-toolbar-additional"
+                   label="Video Speed Controller"
+                   tooltiptext="Video Speed Controller"
+                   image="chrome://videospeed/skin/icon19_disabled.png"
+                   oncommand="VideoSpeedOverlay.togglePanel(event);" />
+  </toolbarpalette>
+
+  <!-- Popup panel (anchored to toolbar button) -->
+  <popupset id="mainPopupSet">
+    <panel id="videospeed-panel"
+           type="arrow"
+           noautohide="false"
+           position="bottomcenter topright"
+           onpopupshown="VideoSpeedOverlay.onPanelShown();"
+           onpopuphidden="VideoSpeedOverlay.onPanelHidden();">
+      <iframe id="videospeed-popup-frame"
+              src="chrome://videospeed/content/popup/popup.html"
+              style="width: 280px; height: 280px; border: none;" />
+    </panel>
+  </popupset>
+
+</overlay>

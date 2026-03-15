@@ -25,7 +25,8 @@ class ActionHandler {
     // Get the controller that was used if called from a button press event
     let targetController = null;
     if (e) {
-      targetController = e.target.getRootNode().host;
+      // In plain DOM (no shadow), walk up to find the .vsc-controller wrapper
+      targetController = e.target.closest('.vsc-controller');
     }
 
     mediaTags.forEach((v) => {

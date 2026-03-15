@@ -1,5 +1,5 @@
 /**
- * Drag functionality for video controller
+ * Drag functionality for video controller — UXP version (plain DOM)
  * Modular architecture using global variables
  */
 
@@ -7,43 +7,39 @@ window.VSC = window.VSC || {};
 
 class DragHandler {
   /**
-   * Handle dragging of video controller
+   * Handle dragging of video controller.
    * @param {HTMLVideoElement} video - Video element
    * @param {MouseEvent} e - Mouse event
    */
   static handleDrag(video, e) {
-    const controller = video.vsc.div;
-    const shadowController = controller.shadowRoot.querySelector('#controller');
+    var controller = video.vsc.div;
+    // Plain DOM: .vsc-ctrl is inside .vsc-controller-inner inside wrapper
+    var innerCtrl = controller.querySelector('.vsc-ctrl');
 
-    // Find nearest parent of same size as video parent
-    const parentElement = window.VSC.DomUtils.findVideoParent(controller);
+    var parentElement = window.VSC.DomUtils.findVideoParent(controller);
 
     video.classList.add('vcs-dragging');
-    shadowController.classList.add('dragging');
+    innerCtrl.classList.add('dragging');
 
-    const initialMouseXY = [e.clientX, e.clientY];
-    const initialControllerXY = [
-      parseInt(shadowController.style.left) || 0,
-      parseInt(shadowController.style.top) || 0,
+    var initialMouseXY = [e.clientX, e.clientY];
+    var initialControllerXY = [
+      parseInt(innerCtrl.style.left) || 0,
+      parseInt(innerCtrl.style.top) || 0
     ];
 
-    const startDragging = (e) => {
-      const style = shadowController.style;
-      const dx = e.clientX - initialMouseXY[0];
-      const dy = e.clientY - initialMouseXY[1];
-
-      style.left = `${initialControllerXY[0] + dx}px`;
-      style.top = `${initialControllerXY[1] + dy}px`;
+    var startDragging = function(e) {
+      var dx = e.clientX - initialMouseXY[0];
+      var dy = e.clientY - initialMouseXY[1];
+      innerCtrl.style.left = (initialControllerXY[0] + dx) + 'px';
+      innerCtrl.style.top = (initialControllerXY[1] + dy) + 'px';
     };
 
-    const stopDragging = () => {
+    var stopDragging = function() {
       parentElement.removeEventListener('mousemove', startDragging);
       parentElement.removeEventListener('mouseup', stopDragging);
       parentElement.removeEventListener('mouseleave', stopDragging);
-
-      shadowController.classList.remove('dragging');
+      innerCtrl.classList.remove('dragging');
       video.classList.remove('vcs-dragging');
-
       window.VSC.logger.debug('Drag operation completed');
     };
 
@@ -55,5 +51,4 @@ class DragHandler {
   }
 }
 
-// Create singleton instance
 window.VSC.DragHandler = DragHandler;

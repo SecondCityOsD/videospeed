@@ -1,57 +1,47 @@
 /**
- * Chrome storage management utilities
- * Modular architecture using global variables
+ * Storage management — UXP version
+ * In the UXP port, page scripts never have direct pref access.
+ * Settings are injected by the frame script via VSC_USER_SETTINGS event,
+ * and saves are sent back via VSC_SAVE_SETTINGS event.
+ * Modular architecture using global variables.
  */
 
 window.VSC = window.VSC || {};
 
 class StorageManager {
-  // Cache for user settings injected from content script
+  // Cache for user settings injected from frame script
   static _injectedSettings = null;
 
-  // Listen for injected settings from content script
+  // Listen for injected settings from frame script
   static _setupSettingsListener() {
     if (typeof window !== 'undefined' && !this._listenerSetup) {
       window.addEventListener('VSC_USER_SETTINGS', (event) => {
-        window.VSC.logger.debug('Received user settings from content script');
+        window.VSC.logger.debug('Received user settings from frame script');
         this._injectedSettings = event.detail;
       });
       this._listenerSetup = true;
     }
   }
+
   /**
-   * Get settings from Chrome storage
+   * Get settings (always from injected settings in UXP).
    * @param {Object} defaults - Default values
    * @returns {Promise<Object>} Storage data
    */
   static async get(defaults = {}) {
-    // Set up listener for injected settings
     this._setupSettingsListener();
 
-    // Check if Chrome APIs are available (content script context)
-    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.sync) {
-      return new Promise((resolve) => {
-        chrome.storage.sync.get(defaults, (storage) => {
-          window.VSC.logger.debug('Retrieved settings from storage');
-          resolve(storage);
-        });
-      });
+    if (this._injectedSettings) {
+      window.VSC.logger.debug('Using injected user settings');
+      return Promise.resolve({ ...defaults, ...this._injectedSettings });
     } else {
-      // Fallback for injected page context - use injected settings if available
-      if (this._injectedSettings) {
-        window.VSC.logger.debug('Using injected user settings');
-        window.VSC.logger.debug('Using injected user settings from content script');
-        // Merge injected settings with defaults
-        return Promise.resolve({ ...defaults, ...this._injectedSettings });
-      } else {
-        window.VSC.logger.debug('Chrome storage not available, using default settings');
-        return Promise.resolve(defaults);
-      }
+      window.VSC.logger.debug('No injected settings yet, using defaults');
+      return Promise.resolve(defaults);
     }
   }
 
   /**
-   * Wait for injected settings to become available
+   * Wait for injected settings to become available.
    * @param {Object} defaults - Default values
    * @returns {Promise<Object>} Settings when available
    */
@@ -59,19 +49,16 @@ class StorageManager {
     this._setupSettingsListener();
 
     if (this._injectedSettings) {
-      const merged = { ...defaults, ...this._injectedSettings };
       window.VSC.logger.debug('Using available injected settings');
-      return Promise.resolve(merged);
+      return Promise.resolve({ ...defaults, ...this._injectedSettings });
     }
 
     return new Promise((resolve) => {
       const checkSettings = () => {
         if (this._injectedSettings) {
-          const merged = { ...defaults, ...this._injectedSettings };
           window.VSC.logger.debug('Injected settings now available');
-          resolve(merged);
+          resolve({ ...defaults, ...this._injectedSettings });
         } else {
-          // Check again in next tick
           setTimeout(checkSettings, 10);
         }
       };
@@ -80,77 +67,45 @@ class StorageManager {
   }
 
   /**
-   * Set settings in Chrome storage
+   * Save settings by dispatching event to frame script.
    * @param {Object} data - Data to store
    * @returns {Promise<void>}
    */
   static async set(data) {
-    // Check if Chrome APIs are available (content script context)
-    if (typeof chrome !== 'undefined' && chrome.storage && chrome.storage.sync) {
-      return new Promise((resolve) => {
-        chrome.storage.sync.set(data, () => {
-          window.VSC.logger.debug('Settings saved to storage');
-          resolve();
-        });
-      });
-    } else {
-      // Fallback for injected page context - send save request to content script
-      window.VSC.logger.debug('Sending save request to content script');
-      window.VSC.logger.debug('Sending settings save request to content script');
+    window.VSC.logger.debug('Sending save request to frame script');
 
-      // Send data to content script via custom event
-      window.dispatchEvent(
-        new CustomEvent('VSC_SAVE_SETTINGS', {
-          detail: data,
-        })
-      );
+    window.dispatchEvent(
+      new CustomEvent('VSC_SAVE_SETTINGS', {
+        detail: data,
+      })
+    );
 
-      // Update injected settings cache
-      this._injectedSettings = { ...this._injectedSettings, ...data };
+    // Update local cache
+    this._injectedSettings = { ...this._injectedSettings, ...data };
 
-      return Promise.resolve();
-    }
+    return Promise.resolve();
   }
 
   /**
-   * Remove keys from Chrome storage
-   * @param {Array<string>} keys - Keys to remove
-   * @returns {Promise<void>}
+   * Remove is a no-op in the UXP injected context.
    */
   static async remove(keys) {
-    return new Promise((resolve) => {
-      chrome.storage.sync.remove(keys, () => {
-        window.VSC.logger.debug('Keys removed from storage');
-        resolve();
-      });
-    });
+    return Promise.resolve();
   }
 
   /**
-   * Clear all Chrome storage
-   * @returns {Promise<void>}
+   * Clear is a no-op in the UXP injected context.
    */
   static async clear() {
-    return new Promise((resolve) => {
-      chrome.storage.sync.clear(() => {
-        window.VSC.logger.debug('Storage cleared');
-        resolve();
-      });
-    });
+    return Promise.resolve();
   }
 
   /**
-   * Listen for storage changes
-   * @param {Function} callback - Callback function for changes
+   * onChanged is a no-op — pref changes come via re-injection.
    */
   static onChanged(callback) {
-    chrome.storage.onChanged.addListener((changes, areaName) => {
-      if (areaName === 'sync') {
-        callback(changes);
-      }
-    });
+    // Not implemented in UXP page context
   }
 }
 
-// Create singleton instance
 window.VSC.StorageManager = StorageManager;

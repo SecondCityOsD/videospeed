@@ -295,10 +295,7 @@ class VideoSpeedExtension {
    */
   setupDocumentCSS(document) {
     const link = document.createElement('link');
-    link.href =
-      typeof chrome !== 'undefined' && chrome.runtime
-        ? chrome.runtime.getURL('src/styles/inject.css')
-        : '/src/styles/inject.css';
+    link.href = 'resource://videospeed/styles/inject.css';
     link.type = 'text/css';
     link.rel = 'stylesheet';
     document.head.appendChild(link);
@@ -405,12 +402,6 @@ extension.initialize().catch((error) => {
   window.VSC.logger.error(`Extension initialization failed: ${error.message}`);
 });
 
-// Export for testing
+// Export for external access
 window.VideoSpeedExtension = VideoSpeedExtension;
 window.videoSpeedExtension = extension;
-
-// Add test indicator for E2E tests
-const testIndicator = document.createElement('div');
-testIndicator.id = 'vsc-test-indicator';
-testIndicator.style.display = 'none';
-document.head.appendChild(testIndicator);
