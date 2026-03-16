@@ -31,3 +31,11 @@ zip -r9 "${XPI_NAME}" \
   -x "*.git*" "*.DS_Store"
 
 echo "Built: ${XPI_NAME} ($(du -h "${XPI_NAME}" | cut -f1))"
+
+# Check if update.rdf version matches install.rdf version
+UPDATE_VERSION=$(grep 'em:version' update.rdf | head -1 | sed 's/.*>\(.*\)<.*/\1/')
+if [ "$VERSION" != "$UPDATE_VERSION" ]; then
+  echo ""
+  echo "WARNING: update.rdf version ($UPDATE_VERSION) does not match install.rdf version ($VERSION)"
+  echo "Remember to update update.rdf before pushing!"
+fi

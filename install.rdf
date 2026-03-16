@@ -10,7 +10,9 @@
     <em:name>Video Speed Controller</em:name>
     <em:description>Speed up, slow down, advance and rewind HTML5 audio/video with shortcuts</em:description>
     <em:creator>SecondCityOsD</em:creator>
-    <em:homepageURL>https://github.com/SecondCityOsD/videospeed-uxp</em:homepageURL>
+    <em:homepageURL>https://github.com/SecondCityOsD/videospeed</em:homepageURL>
+    <em:updateURL>https://raw.githubusercontent.com/SecondCityOsD/videospeed/main/update.rdf</em:updateURL>
+    <em:iconURL>chrome://videospeed/skin/icon48.png</em:iconURL>
 
     <!-- Pale Moon -->
     <em:targetApplication>
