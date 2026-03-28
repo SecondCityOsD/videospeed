@@ -1,4 +1,4 @@
-**Important: This extension is written for XUL/UXP based browsers, like Pale Moon. If you're looking for Video Speed controller addon for Chrome, you could check it out here https://github.com/igrigorik/videospeed**
+# Important: This extension is written for XUL/UXP based browsers, like Pale Moon. If you're looking for Video Speed controller addon for Chrome, you could check it out here https://github.com/igrigorik/videospeed
 
 # The science of accelerated playback
 
