@@ -95,16 +95,12 @@ window.VSC.DomUtils.getShadow = function (parent, maxDepth = 10) {
         result.push(child);
         getChild(child, depth + 1);
 
-        // Only traverse shadow roots if we haven't exceeded depth limit
+        // Only traverse shadow roots if we haven't exceeded depth limit.
+        // Always synchronous — callers consume the return value immediately;
+        // the previous `setTimeout` branch for depth>5 created a silent race
+        // where deeply-nested shadow elements were missed.
         if (child.shadowRoot && depth < maxDepth - 2) {
-          // Use setTimeout to yield control back to browser for deep shadow roots
-          if (depth > 5) {
-            setTimeout(() => {
-              result.push(...window.VSC.DomUtils.getShadow(child.shadowRoot, maxDepth - depth));
-            }, 0);
-          } else {
-            result.push(...window.VSC.DomUtils.getShadow(child.shadowRoot, maxDepth - depth));
-          }
+          result.push(...window.VSC.DomUtils.getShadow(child.shadowRoot, maxDepth - depth));
         }
 
         child = child.nextElementSibling;
@@ -143,19 +139,25 @@ window.VSC.DomUtils.findVideoParent = function (element) {
 window.VSC.DomUtils.initializeWhenReady = function (document, callback) {
   window.VSC.logger.debug('Begin initializeWhenReady');
 
-  window.onload = () => {
+  // Use addEventListener instead of property assignment so we don't clobber
+  // any handlers the page (or another extension) has registered. `{ once: true }`
+  // takes care of cleanup automatically.
+  const handleWindowLoad = () => {
     callback(window.document);
   };
+  window.addEventListener('load', handleWindowLoad, { once: true });
 
   if (document) {
     if (document.readyState === 'complete') {
       callback(document);
     } else {
-      document.onreadystatechange = () => {
+      const handleReadyStateChange = () => {
         if (document.readyState === 'complete') {
+          document.removeEventListener('readystatechange', handleReadyStateChange);
           callback(document);
         }
       };
+      document.addEventListener('readystatechange', handleReadyStateChange);
     }
   }
 

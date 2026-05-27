@@ -213,7 +213,11 @@ class ShadowDOMManager {
 
   static updateSpeedDisplay(container, speed) {
     var indicator = this.getSpeedIndicator(container);
-    if (indicator) indicator.textContent = speed.toFixed(2);
+    if (!indicator) return;
+    // Route through Constants.formatSpeed so any future format tweak (e.g.
+    // dropping trailing zero) applies everywhere automatically.
+    var fmt = window.VSC.Constants && window.VSC.Constants.formatSpeed;
+    indicator.textContent = fmt ? fmt(speed) : speed.toFixed(2);
   }
 
   static calculatePosition(video) {
