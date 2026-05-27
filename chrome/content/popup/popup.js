@@ -86,43 +86,21 @@ window.addEventListener("load", function() {
   }
 
   function loadSettingsAndInitialize() {
+    // VSCPrefs.getAll() already parses JSON_KEYS (keyBindings, speeds) into
+    // their structured form, so we just read `bindings` as an array.
     var settings = VSCPrefs.getAll();
+    var bindings = Array.isArray(settings.keyBindings) ? settings.keyBindings : [];
 
-    var slowerStep = 0.1;
-    var fasterStep = 0.1;
-    var resetSpeed = 1.0;
-
-    if (settings.keyBindings && typeof settings.keyBindings === 'string') {
-      try {
-        settings.keyBindings = JSON.parse(settings.keyBindings);
-      } catch(e) {
-        settings.keyBindings = [];
-      }
+    function valueFor(action, fallback) {
+      var match = bindings.find(function(kb) { return kb.action === action; });
+      return (match && typeof match.value === 'number') ? match.value : fallback;
     }
 
-    if (settings.keyBindings && Array.isArray(settings.keyBindings)) {
-      var slowerBinding = settings.keyBindings.find(function(kb) {
-        return kb.action === "slower";
-      });
-      var fasterBinding = settings.keyBindings.find(function(kb) {
-        return kb.action === "faster";
-      });
-      var fastBinding = settings.keyBindings.find(function(kb) {
-        return kb.action === "fast";
-      });
-
-      if (slowerBinding && typeof slowerBinding.value === "number") {
-        slowerStep = slowerBinding.value;
-      }
-      if (fasterBinding && typeof fasterBinding.value === "number") {
-        fasterStep = fasterBinding.value;
-      }
-      if (fastBinding && typeof fastBinding.value === "number") {
-        resetSpeed = fastBinding.value;
-      }
-    }
-
-    updateSpeedControlsUI(slowerStep, fasterStep, resetSpeed);
+    updateSpeedControlsUI(
+      valueFor('slower', 0.1),
+      valueFor('faster', 0.1),
+      valueFor('fast', 1.0)
+    );
     initializeSpeedControls();
   }
 

@@ -191,12 +191,6 @@ var VideoSpeedOverlay = {
     if (!root || root.hasAttribute("data-vsc-injected")) return;
     root.setAttribute("data-vsc-injected", "1");
 
-    // Diagnostic — sends to the Browser Console so we can confirm the chrome
-    // side is firing for this document.
-    try {
-      Services.console.logStringMessage("[VSC overlay] injecting into " + doc.location.href);
-    } catch (e) {}
-
     // SPA navigations leave the same <browser> element but the controllers
     // are gone — make sure our per-browser tracking set isn't stuck thinking
     // there are still controllers from the previous page.

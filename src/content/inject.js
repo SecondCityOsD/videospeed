@@ -40,7 +40,6 @@ class VideoSpeedExtension {
       this.MediaElementObserver = window.VSC.MediaElementObserver;
       this.MESSAGE_TYPES = window.VSC.Constants.MESSAGE_TYPES;
 
-      console.log('[VSC] initialize() running on ' + location.href);
       this.logger.info('Video Speed Controller starting...');
 
       this.config = window.VSC.videoSpeedConfig;
@@ -248,11 +247,7 @@ class VideoSpeedExtension {
 
   onVideoFound(video, parent) {
     try {
-      console.log('[VSC] onVideoFound:', video.tagName, 'readyState=' + video.readyState,
-                  'src=' + (video.currentSrc || video.src || '(none)'));
-
       if (this.mediaObserver && !this.mediaObserver.isValidMediaElement(video)) {
-        console.log('[VSC] rejected by isValidMediaElement:', video);
         this.logger.debug('Video element is not valid for controller attachment');
         return;
       }
@@ -263,7 +258,6 @@ class VideoSpeedExtension {
       }
 
       if (video.readyState < 2) {
-        console.log('[VSC] deferring controller until loadeddata (readyState=' + video.readyState + ')');
         this.logger.debug(
           'Deferring controller until loadeddata (readyState=%d)',
           video.readyState
@@ -357,14 +351,10 @@ class VideoSpeedExtension {
 }
 
 (function () {
-  console.log('[VSC] inject.js IIFE running on ' + location.href +
-              ' (readyState=' + document.readyState + ')');
-
   // Single-flight guard: hoisted to the top so a second injection on the same
   // document (SPA push-state, document.write) doesn't double-register
   // VSC_MESSAGE listeners or run initialize() twice in parallel.
   if (window.VSC_controller) {
-    console.log('[VSC] already injected on this document; skipping');
     return;
   }
 
