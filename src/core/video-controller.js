@@ -63,21 +63,7 @@ class VideoController {
    * @private
    */
   initializeSpeed() {
-    // Priority: per-site default speed > lastSpeed (if remembering) > 1.0
-    let targetSpeed = 1.0;
-    if (this.config.settings.siteDefaultSpeed) {
-      targetSpeed = this.config.settings.siteDefaultSpeed;
-      window.VSC.logger.debug(`Using siteDefaultSpeed: ${targetSpeed}`);
-    } else if (this.config.settings.rememberSpeed && this.config.settings.lastSpeed) {
-      targetSpeed = this.config.settings.lastSpeed;
-      window.VSC.logger.debug(`Using lastSpeed: ${targetSpeed}`);
-    } else {
-      window.VSC.logger.debug('No remembered speed — using 1.0x');
-    }
-
-    // Do NOT rebind the `reset` key here. Upstream leaves it bound to the
-    // user's configured value (default 1.0) — silently rewriting it to the
-    // "fast" preset broke the R key for the entire session.
+    const targetSpeed = this.getTargetSpeed();
 
     window.VSC.logger.debug(`Setting initial playbackRate to: ${targetSpeed}`);
 
@@ -100,6 +86,35 @@ class VideoController {
     } else {
       this.actionHandler.adjustSpeed(this.video, targetSpeed, { source: 'init' });
     }
+  }
+
+  /**
+   * Compute the target speed for initialization or lifecycle restore.
+   *
+   * Priority:
+   *   1. siteDefaultSpeed (per-site rule) — always wins if configured
+   *   2. lastSpeed (in-session user choice OR persisted from rememberSpeed)
+   *   3. 1.0 fallback
+   *
+   * Pure read of config.settings — no side effects. Called by initializeSpeed
+   * AND by mediaEventAction (play/seeked), so settings updates between create
+   * and event time (via the live-settings hot-reload) are honoured.
+   *
+   * @returns {number}
+   */
+  getTargetSpeed() {
+    if (this.config.settings.siteDefaultSpeed) {
+      return this.config.settings.siteDefaultSpeed;
+    }
+    // In-session lastSpeed is honoured regardless of rememberSpeed —
+    // rememberSpeed only governs PERSISTENCE across page loads.
+    if (
+      this.config.settings.lastSpeed != null &&
+      Math.abs(this.config.settings.lastSpeed - 1.0) > 0.05
+    ) {
+      return this.config.settings.lastSpeed;
+    }
+    return 1.0;
   }
 
   /**
@@ -210,22 +225,11 @@ class VideoController {
    */
   setupEventHandlers() {
     const mediaEventAction = (event) => {
-      // Compute target at event time — settings may have updated since the
-      // controller was created (live pref hot-reload).
-      let targetSpeed = 1.0;
-      if (this.config.settings.siteDefaultSpeed) {
-        targetSpeed = this.config.settings.siteDefaultSpeed;
-      } else if (this.config.settings.lastSpeed != null &&
-                 Math.abs(this.config.settings.lastSpeed - 1.0) > 0.05) {
-        // In-session memory: rememberSpeed governs PERSISTENCE across page
-        // loads, but mid-session we always restore the user's choice so
-        // quality switches / ad transitions don't silently drop us to 1×.
-        targetSpeed = this.config.settings.lastSpeed;
-      }
-
+      // Read target at event time so live-settings updates between controller
+      // creation and event firing are honoured.
+      const targetSpeed = this.getTargetSpeed();
       window.VSC.logger.debug(`Media event ${event.type}: restoring speed to ${targetSpeed}`);
-      // source:'init' — lifecycle restore, do not pollute lastSpeed and do
-      // not also rebind the reset key.
+      // source:'init' — lifecycle restore, do not pollute lastSpeed.
       this.actionHandler.adjustSpeed(event.target, targetSpeed, { source: 'init' });
     };
 
@@ -381,7 +385,14 @@ class VideoController {
     }
 
     // Original logic for video elements
-    if (isVisible && isCurrentlyHidden && !this.div.classList.contains('vsc-manual')) {
+    if (
+      isVisible &&
+      isCurrentlyHidden &&
+      !this.div.classList.contains('vsc-manual') &&
+      // Respect the user's `startHidden` preference as a hard floor — never
+      // auto-show the controller if they've asked for it to start hidden.
+      !this.config.settings.startHidden
+    ) {
       // Video became visible and controller is hidden (but not manually hidden)
       this.div.classList.remove('vsc-hidden');
       window.VSC.logger.debug('Showing controller - video became visible');
