@@ -54,18 +54,15 @@ class BaseSiteHandler {
    * Apply a speed change to the video. Default behaviour just writes
    * playbackRate; site handlers can override to use a site-specific API
    * (Netflix postMessage, Prime Video custom event, etc.).
+   *
+   * Matches upstream 0.10.2's bare assignment contract — no return value,
+   * no try/catch. If a site has a write-protected playbackRate (rare),
+   * the TypeError propagates up to the caller (action-handler.js).
    * @param {HTMLMediaElement} video
    * @param {number} speed
-   * @returns {boolean}
    */
   handleSpeedChange(video, speed) {
-    try {
-      video.playbackRate = speed;
-    } catch (e) {
-      window.VSC.logger.error(`handleSpeedChange failed: ${e.message}`);
-      return false;
-    }
-    return true;
+    video.playbackRate = speed;
   }
 
   /**
