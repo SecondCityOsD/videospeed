@@ -21,8 +21,15 @@ class ShadowDOMManager {
     // `flex-direction: column` rules that catch our class names. Without
     // !important on display/flex-direction/float/width the controller
     // collapses into a vertical column on those sites.
+    // Every selector below is rooted at `.vsc-controller .vsc-controller-inner`
+    // for a specificity floor of (0, 3, 0). That beats common userscript reskin
+    // selectors like `.html5-video-player *` (0, 1, 1) and most attribute /
+    // class-broad rules from VORAPIS V3, Tampermonkey UI patches, etc.
+    // Sites that need to override us would have to use !important *and* match
+    // our specific class chain — vanishingly rare.
     style.textContent =
-      '.vsc-controller-inner, .vsc-controller-inner * {' +
+      '.vsc-controller .vsc-controller-inner,' +
+      '.vsc-controller .vsc-controller-inner * {' +
         'line-height: 1.8em !important;' +
         'font-family: sans-serif !important;' +
         'font-size: 13px !important;' +
@@ -30,70 +37,72 @@ class ShadowDOMManager {
         'float: none !important;' +
         'clear: none !important;' +
         'vertical-align: middle !important;' +
+        // Neutralize page-applied transforms / zoom on our own subtree.
+        // (Ancestor transforms still affect us — that needs a different fix,
+        //  see notes in PORT-NOTES.md.)
+        'transform: none !important;' +
+        'zoom: 1 !important;' +
       '}' +
-      '.vsc-controller-inner .vsc-ctrl {' +
+      '.vsc-controller .vsc-controller-inner .vsc-ctrl {' +
         'position: absolute !important;' +
-        // top/left are seeded inline via shadow-dom.js createShadowDOM and
-        // mutated inline by drag-handler.js. They MUST NOT be !important
-        // here — author-stylesheet !important outranks normal-priority
-        // inline styles, which would freeze the controller at 0,0 and break
-        // drag entirely.
+        // top/left seeded inline by shadow-dom.js, mutated inline by
+        // drag-handler.js — MUST NOT be !important here (stylesheet
+        // !important outranks normal-priority inline styles and would
+        // freeze the controller at 0,0).
         'top: 0; left: 0;' +
         'display: inline-block !important;' +
         'background: black !important; color: white !important;' +
         'border-radius: 6px !important; padding: 4px !important;' +
         'margin: 10px 10px 10px 15px !important;' +
-        // Whole controller body is a drag handle (buttons override below).
         'cursor: -webkit-grab !important; cursor: grab !important;' +
         'z-index: 9999999 !important;' +
         'white-space: nowrap !important;' +
         'width: auto !important; max-width: none !important;' +
         'height: auto !important; max-height: none !important;' +
-        // Anchor font-size on the controller body so children that rely on
-        // ems (or `inherit`) can't be shrunk by hostile parent CSS such as
-        // VORAPIS V3's YouTube reskins.
         'font-size: 13px !important; line-height: 18px !important;' +
       '}' +
-      '.vsc-controller-inner .vsc-ctrl:hover { opacity: 0.7 !important; }' +
-      '.vsc-controller-inner .vsc-ctrl:hover > .vsc-draggable { margin-right: 0.8em !important; }' +
-      '.vsc-controller-inner .vsc-controls {' +
+      '.vsc-controller .vsc-controller-inner .vsc-ctrl:hover {' +
+        'opacity: 0.7 !important;' +
+      '}' +
+      '.vsc-controller .vsc-controller-inner .vsc-ctrl:hover > .vsc-draggable {' +
+        'margin-right: 8px !important;' +
+      '}' +
+      '.vsc-controller .vsc-controller-inner .vsc-controls {' +
         'display: none !important;' +
         'flex-direction: row !important;' +
         'align-items: center !important;' +
         'vertical-align: middle !important;' +
         'width: auto !important; height: auto !important;' +
       '}' +
-      '.vsc-controller-inner .vsc-ctrl:hover .vsc-controls,' +
-      '.vsc-controller-inner .vsc-ctrl.dragging .vsc-controls {' +
+      '.vsc-controller .vsc-controller-inner .vsc-ctrl:hover .vsc-controls,' +
+      '.vsc-controller .vsc-controller-inner .vsc-ctrl.dragging .vsc-controls {' +
         'display: inline-flex !important;' +
         'flex-direction: row !important;' +
         'align-items: center !important;' +
       '}' +
-      '.vsc-controller-inner .vsc-ctrl.dragging {' +
+      '.vsc-controller .vsc-controller-inner .vsc-ctrl.dragging {' +
         'cursor: -webkit-grabbing !important; opacity: 0.7 !important;' +
       '}' +
-      '.vsc-controller-inner .vsc-draggable {' +
+      '.vsc-controller .vsc-controller-inner .vsc-draggable {' +
         'display: inline-flex !important;' +
         'flex-direction: row !important;' +
         'align-items: center !important; justify-content: center !important;' +
         'cursor: -webkit-grab !important;' +
-        // Absolute pixels — em was vulnerable to userscripts changing the
-        // computed font-size on any ancestor.
         'width: 40px !important; height: 20px !important;' +
         'min-width: 40px !important; max-width: none !important;' +
         'font-size: 13px !important; line-height: 20px !important;' +
         'text-align: center !important; vertical-align: middle !important;' +
       '}' +
-      '.vsc-controller-inner .vsc-draggable:active { cursor: -webkit-grabbing !important; }' +
-      '.vsc-controller-inner .vsc-btn {' +
+      '.vsc-controller .vsc-controller-inner .vsc-draggable:active {' +
+        'cursor: -webkit-grabbing !important;' +
+      '}' +
+      '.vsc-controller .vsc-controller-inner .vsc-btn {' +
         'display: inline-block !important;' +
         'flex: 0 0 auto !important;' +
         'opacity: 1 !important; cursor: pointer !important;' +
         'color: black !important; background: white !important;' +
         'font-weight: normal !important; border-radius: 5px !important;' +
         'padding: 1px 5px 3px 5px !important;' +
-        // Absolute font/line — `inherit` was leaking page CSS into us
-        // (VORAPIS V3 was the canonical breaker).
         'font-size: 13px !important; line-height: 18px !important;' +
         'border: 0px solid white !important;' +
         'font-family: "Lucida Console", Monaco, monospace !important;' +
@@ -103,11 +112,21 @@ class ShadowDOMManager {
         'height: auto !important; min-height: 0 !important;' +
         'text-align: center !important;' +
       '}' +
-      '.vsc-controller-inner .vsc-btn:focus { outline: 0 !important; }' +
-      '.vsc-controller-inner .vsc-btn:hover { opacity: 1 !important; background: #2196f3 !important; color: #ffffff !important; }' +
-      '.vsc-controller-inner .vsc-btn:active { background: #2196f3 !important; color: #ffffff !important; font-weight: bold !important; }' +
-      '.vsc-controller-inner .vsc-btn.rw { opacity: 0.65 !important; }' +
-      '.vsc-controller-inner .vsc-btn.hideButton { opacity: 0.65 !important; margin-left: 8px !important; margin-right: 2px !important; }';
+      '.vsc-controller .vsc-controller-inner .vsc-btn:focus {' +
+        'outline: 0 !important;' +
+      '}' +
+      '.vsc-controller .vsc-controller-inner .vsc-btn:hover {' +
+        'opacity: 1 !important; background: #2196f3 !important; color: #ffffff !important;' +
+      '}' +
+      '.vsc-controller .vsc-controller-inner .vsc-btn:active {' +
+        'background: #2196f3 !important; color: #ffffff !important; font-weight: bold !important;' +
+      '}' +
+      '.vsc-controller .vsc-controller-inner .vsc-btn.rw {' +
+        'opacity: 0.65 !important;' +
+      '}' +
+      '.vsc-controller .vsc-controller-inner .vsc-btn.hideButton {' +
+        'opacity: 0.65 !important; margin-left: 8px !important; margin-right: 2px !important;' +
+      '}';
     (doc.head || doc.documentElement).appendChild(style);
   }
 

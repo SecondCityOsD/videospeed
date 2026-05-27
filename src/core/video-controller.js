@@ -187,13 +187,18 @@ class VideoController {
    */
   setupEventHandlers() {
     const mediaEventAction = (event) => {
-      let storedSpeed;
+      let storedSpeed = 1.0;
 
-      if (this.config.settings.rememberSpeed && this.config.settings.lastSpeed) {
+      // rememberSpeed only governs PERSISTENCE across page loads. Within a
+      // single session, if the user has explicitly set a speed (lastSpeed),
+      // we always restore it on play/seek so quality switches, ad
+      // transitions, and stream rebuilds don't silently drop us back to 1×.
+      if (this.config.settings.lastSpeed != null &&
+          Math.abs(this.config.settings.lastSpeed - 1.0) > 0.05) {
         storedSpeed = this.config.settings.lastSpeed;
         window.VSC.logger.debug(`Re-applying lastSpeed on play/seek: ${storedSpeed}`);
-      } else {
-        storedSpeed = 1.0;
+      } else if (!this.config.settings.rememberSpeed) {
+        // No session intent and not remembering: keep reset key bound to "fast".
         this.config.setKeyBinding('reset', this.config.getKeyBinding('fast'));
       }
 

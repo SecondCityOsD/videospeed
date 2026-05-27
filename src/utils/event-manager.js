@@ -250,12 +250,14 @@ class EventManager {
     if (this.coolDown) {
       clearTimeout(this.coolDown);
     }
-    // Widened from 1000 to 1500 ms so fight detection covers the typical
-    // delay between VSC setting playbackRate and a hostile site re-applying
-    // its own (YouTube quality switches can run ~1.2s late).
+    // 3 seconds — covers most "site fights" (YouTube quality switches,
+    // Netflix DRM re-init, Prime Video ad transitions). Longer-window
+    // recovery (e.g. pause → switch quality 30s later) goes through the
+    // play/seeked listener in video-controller.js, which re-applies
+    // lastSpeed unconditionally.
     this.coolDown = setTimeout(() => {
       this.coolDown = false;
-    }, 1500);
+    }, 3000);
   }
 
   /**
