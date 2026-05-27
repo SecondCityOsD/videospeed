@@ -1,0 +1,108 @@
+/* Video Speed Controller — Options page (XUL styling to match Chrome) */
+
+/* Scrollable page container */
+#options-scroll {
+  overflow: auto;
+}
+
+#options-container {
+  max-width: 640px;
+  padding: 10px 15px;
+}
+
+/* Header */
+.header-title {
+  font-size: 1.5em;
+  font-weight: normal;
+  margin-bottom: 8px;
+}
+
+/* Shortcut rows */
+.shortcut-row {
+  margin: 3px 0;
+}
+
+.shortcut-row menulist.customDo {
+  width: 170px;
+}
+
+.shortcut-row textbox.customKey {
+  width: 80px;
+  text-align: center;
+}
+
+.shortcut-row textbox.customValue {
+  width: 80px;
+  text-align: center;
+}
+
+.shortcut-row menulist.customForce {
+  width: 250px;
+}
+
+/* Settings rows */
+.setting-row {
+  margin: 4px 0;
+}
+
+.setting-label {
+  width: 200px;
+}
+
+/* Indent for descriptions */
+.indent {
+  margin-left: 24px;
+  font-size: 0.9em;
+  color: GrayText;
+}
+
+/* Action buttons row */
+#action-buttons {
+  margin: 10px 0;
+}
+
+#action-buttons button {
+  margin-right: 4px;
+}
+
+/* Primary button (Save) — purple accent like Chrome */
+.primary-btn {
+  -moz-appearance: none;
+  background-color: #6750a4;
+  color: #ffffff;
+  border: 1px solid #6750a4;
+  border-radius: 4px;
+  padding: 4px 16px;
+  font-weight: 500;
+  min-height: 28px;
+}
+
+.primary-btn:hover {
+  background-color: #7c6aaf;
+}
+
+/* Status message */
+#status {
+  margin-left: 8px;
+}
+
+/* FAQ section */
+#faq {
+  margin-top: 10px;
+  padding: 0 6px;
+}
+
+.faq-heading {
+  font-weight: bold;
+  margin-top: 8px;
+}
+
+#faq description {
+  margin: 4px 0 8px 0;
+}
+
+/* Remove button for custom shortcuts */
+.removeParent {
+  min-width: 0 !important;
+  padding: 0 6px;
+}

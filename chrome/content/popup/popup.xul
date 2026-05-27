@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="utf-8"?>
+<?xml-stylesheet href="chrome://videospeed/content/popup/popup.css" type="text/css"?>
+
+<window xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+        orient="vertical">
+
+  <script type="application/x-javascript" src="popup.js"/>
+
+  <vbox id="popup-container" flex="1">
+
+    <!-- Speed Controls: -step / reset / +step -->
+    <hbox id="speed-controls" align="center">
+      <button id="speed-decrease" label="-0.1" delta="-0.1" flex="1"/>
+      <button id="speed-reset" label="1.0" class="reset-btn" flex="1"/>
+      <button id="speed-increase" label="+0.1" delta="0.1" flex="1"/>
+    </hbox>
+
+    <!-- Speed Presets: 4x2 grid -->
+    <vbox id="speed-presets">
+      <hbox>
+        <button class="preset-btn" label="0.5" speed="0.5" flex="1"/>
+        <button class="preset-btn" label="0.75" speed="0.75" flex="1"/>
+        <button class="preset-btn" label="1" speed="1.0" flex="1"/>
+        <button class="preset-btn" label="1.25" speed="1.25" flex="1"/>
+      </hbox>
+      <hbox>
+        <button class="preset-btn" label="1.5" speed="1.5" flex="1"/>
+        <button class="preset-btn" label="1.75" speed="1.75" flex="1"/>
+        <button class="preset-btn" label="2" speed="2.0" flex="1"/>
+        <button class="preset-btn" label="2.5" speed="2.5" flex="1"/>
+      </hbox>
+    </vbox>
+
+    <!-- Footer: status + power/settings -->
+    <hbox id="footer" align="center">
+      <label id="status" value="" hidden="true"/>
+      <spacer flex="1"/>
+      <button id="disable" class="power-btn" tooltiptext="Toggle Extension"
+              label="&#x23FB;"/>
+      <button id="config" class="settings-btn" tooltiptext="Settings"
+              label="&#x2699;"/>
+    </hbox>
+
+  </vbox>
+
+</window>

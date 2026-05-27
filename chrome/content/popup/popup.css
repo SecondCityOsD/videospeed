@@ -1,0 +1,63 @@
+/* Video Speed Controller — Popup (legacy Pale Moon XUL styling) */
+
+window {
+  background-color: -moz-Dialog;
+  color: -moz-DialogText;
+  font: message-box;
+}
+
+#popup-container {
+  padding: 6px;
+  min-width: 230px;
+}
+
+/* Speed controls row (-0.1 / reset / +0.1) — native XUL buttons */
+#speed-controls {
+  margin-bottom: 4px;
+}
+
+#speed-controls button {
+  margin: 1px 2px;
+  min-width: 50px;
+  padding: 2px 6px;
+}
+
+.reset-btn {
+  font-weight: bold;
+}
+
+/* Preset grid */
+#speed-presets hbox {
+  margin: 1px 0;
+}
+
+.preset-btn {
+  margin: 1px 2px;
+  min-width: 0;
+  padding: 2px 4px;
+}
+
+/* Footer: status + power/settings icon buttons */
+#footer {
+  margin-top: 6px;
+  padding-top: 4px;
+  border-top: 1px solid ThreeDLightShadow;
+}
+
+#status {
+  font-size: 11px;
+  color: GrayText;
+  margin-left: 2px;
+}
+
+.power-btn,
+.settings-btn {
+  min-width: 0 !important;
+  padding: 1px 5px !important;
+  margin: 0 1px !important;
+  font-size: 14px;
+}
+
+.power-btn[disabled-state="true"] {
+  color: #b00;
+}
