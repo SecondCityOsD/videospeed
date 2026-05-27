@@ -22,6 +22,14 @@ class VideoController {
     // Generate unique controller ID for badge tracking
     this.controllerId = this.generateControllerId(target);
 
+    // Transient per-instance state (not persisted).
+    //   speedBeforeReset    — set when R toggles to 1.0; restored on next R
+    //   positionBeforeJump  — set when J jumps to a mark; restored on next J
+    // Must be `null` (not undefined) so the `!== null` checks in
+    // action-handler.js resetSpeed / jumpToMark take the right branch.
+    this.speedBeforeReset = null;
+    this.positionBeforeJump = null;
+
     // Tracking is handled by inject.js → window.VSC.stateManager.registerController
     // after the constructor returns; no per-config registration needed any more.
 
@@ -55,9 +63,8 @@ class VideoController {
    * @private
    */
   initializeSpeed() {
-    let targetSpeed = 1.0;
-
     // Priority: per-site default speed > lastSpeed (if remembering) > 1.0
+    let targetSpeed = 1.0;
     if (this.config.settings.siteDefaultSpeed) {
       targetSpeed = this.config.settings.siteDefaultSpeed;
       window.VSC.logger.debug(`Using siteDefaultSpeed: ${targetSpeed}`);
@@ -65,18 +72,34 @@ class VideoController {
       targetSpeed = this.config.settings.lastSpeed;
       window.VSC.logger.debug(`Using lastSpeed: ${targetSpeed}`);
     } else {
-      window.VSC.logger.debug('No remembered speed - using 1.0x');
+      window.VSC.logger.debug('No remembered speed — using 1.0x');
     }
 
-    // Reset key toggles between current speed and the "fast" preset.
-    if (this.config.settings.rememberSpeed) {
-      this.config.setKeyBinding('reset', targetSpeed);
-    } else {
-      this.config.setKeyBinding('reset', this.config.getKeyBinding('fast'));
-    }
+    // Do NOT rebind the `reset` key here. Upstream leaves it bound to the
+    // user's configured value (default 1.0) — silently rewriting it to the
+    // "fast" preset broke the R key for the entire session.
 
     window.VSC.logger.debug(`Setting initial playbackRate to: ${targetSpeed}`);
-    this.video.playbackRate = targetSpeed;
+
+    if (!this.actionHandler || targetSpeed === this.video.playbackRate) {
+      return;
+    }
+
+    // Defer until metadata loaded — setting playbackRate before the player
+    // has initialized can race with the site's own init sequence.
+    // source:'init' tells setSpeed not to update lastSpeed (it's a lifecycle
+    // restore, not a user choice).
+    if (this.video.readyState < 1) {
+      const handler = () => {
+        this.video.removeEventListener('loadedmetadata', handler);
+        if (targetSpeed !== this.video.playbackRate) {
+          this.actionHandler.adjustSpeed(this.video, targetSpeed, { source: 'init' });
+        }
+      };
+      this.video.addEventListener('loadedmetadata', handler);
+    } else {
+      this.actionHandler.adjustSpeed(this.video, targetSpeed, { source: 'init' });
+    }
   }
 
   /**
@@ -187,26 +210,34 @@ class VideoController {
    */
   setupEventHandlers() {
     const mediaEventAction = (event) => {
-      let storedSpeed = 1.0;
-
-      // rememberSpeed only governs PERSISTENCE across page loads. Within a
-      // single session, if the user has explicitly set a speed (lastSpeed),
-      // we always restore it on play/seek so quality switches, ad
-      // transitions, and stream rebuilds don't silently drop us back to 1×.
-      if (this.config.settings.lastSpeed != null &&
-          Math.abs(this.config.settings.lastSpeed - 1.0) > 0.05) {
-        storedSpeed = this.config.settings.lastSpeed;
-        window.VSC.logger.debug(`Re-applying lastSpeed on play/seek: ${storedSpeed}`);
-      } else if (!this.config.settings.rememberSpeed) {
-        // No session intent and not remembering: keep reset key bound to "fast".
-        this.config.setKeyBinding('reset', this.config.getKeyBinding('fast'));
+      // Compute target at event time — settings may have updated since the
+      // controller was created (live pref hot-reload).
+      let targetSpeed = 1.0;
+      if (this.config.settings.siteDefaultSpeed) {
+        targetSpeed = this.config.settings.siteDefaultSpeed;
+      } else if (this.config.settings.lastSpeed != null &&
+                 Math.abs(this.config.settings.lastSpeed - 1.0) > 0.05) {
+        // In-session memory: rememberSpeed governs PERSISTENCE across page
+        // loads, but mid-session we always restore the user's choice so
+        // quality switches / ad transitions don't silently drop us to 1×.
+        targetSpeed = this.config.settings.lastSpeed;
       }
 
-      this.actionHandler.setSpeed(event.target, storedSpeed);
+      window.VSC.logger.debug(`Media event ${event.type}: restoring speed to ${targetSpeed}`);
+      // source:'init' — lifecycle restore, do not pollute lastSpeed and do
+      // not also rebind the reset key.
+      this.actionHandler.adjustSpeed(event.target, targetSpeed, { source: 'init' });
     };
 
     this.handlePlay = mediaEventAction.bind(this);
-    this.handleSeek = mediaEventAction.bind(this);
+    // Don't restore on seeked if the player hasn't loaded data yet —
+    // it may still be initializing and writing playbackRate now would race.
+    this.handleSeek = (event) => {
+      if (event.target.readyState < 2) {
+        return;
+      }
+      mediaEventAction.call(this, event);
+    };
 
     this.video.addEventListener('play', this.handlePlay);
     this.video.addEventListener('seeked', this.handleSeek);
