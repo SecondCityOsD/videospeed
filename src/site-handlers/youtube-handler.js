@@ -21,8 +21,26 @@ class YouTubeHandler extends window.VSC.BaseSiteHandler {
    * @returns {Object} Positioning information
    */
   getControllerPosition(parent, _video) {
-    // YouTube requires special positioning to ensure controller is on top
-    const targetParent = parent.parentElement;
+    // YouTube requires special positioning to ensure controller is on top.
+    // Default: insert into the .html5-video-player (one level up from video container).
+    let targetParent = parent.parentElement;
+
+    // Embedded YouTube has a #player-controls overlay that sits as a sibling of
+    // .html5-video-player and creates a separate stacking context, intercepting
+    // all pointer events. Our controller inside .html5-video-player can't
+    // z-index above it. Fix: insert into #player (the common parent) so our
+    // controller participates in the same stacking context as the overlay.
+    // NOTE: scope the query to targetParent.parentElement so we don't falsely
+    // match a global #player-controls element on the desktop site (which would
+    // promote insertion into the tightly-managed ytd-player > div#container
+    // and crash Polymer).
+    if (
+      targetParent &&
+      targetParent.parentElement &&
+      targetParent.parentElement.querySelector('#player-controls')
+    ) {
+      targetParent = targetParent.parentElement;
+    }
 
     return {
       insertionPoint: targetParent,
