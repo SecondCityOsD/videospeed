@@ -63,8 +63,13 @@ class ActionHandler {
       }
 
       case 'reset':
+        // R is a literal "reset to target" (default 1.0). UXP fork
+        // deviation from upstream: upstream cross-toggles R with the
+        // 'fast' preset (see resetSpeed below) which is documented in
+        // their unit tests, but the user finds the toggle confusing.
+        // Bypass resetSpeed and just adjust directly.
         window.VSC.logger.debug('Reset speed');
-        this.resetSpeed(video, value, this.config.getKeyBinding('fast'));
+        this.adjustSpeed(video, value);
         break;
 
       case 'display': {
