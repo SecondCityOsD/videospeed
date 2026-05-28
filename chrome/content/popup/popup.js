@@ -13,13 +13,22 @@ function getMainWindow() {
 
 function sendToContent(messageName, data) {
   var mainWindow = getMainWindow();
-  if (mainWindow && mainWindow.gBrowser) {
-    var browser = mainWindow.gBrowser.selectedBrowser;
-    if (browser && browser.contentDocument) {
-      browser.contentDocument.documentElement.dispatchEvent(
-        new CustomEvent('VSC_MESSAGE', { detail: data })
-      );
-    }
+  if (!mainWindow || !mainWindow.gBrowser) return;
+  var browser = mainWindow.gBrowser.selectedBrowser;
+  if (!browser || !browser.contentDocument || !browser.contentWindow) return;
+
+  try {
+    // Clone the chrome-scope `data` into the content window so the content
+    // script's `event.detail` access doesn't throw "Permission denied to
+    // access property 'detail'". Use the content window's own CustomEvent
+    // constructor so the event itself is in content scope too.
+    var clonedDetail = Components.utils.cloneInto(data, browser.contentWindow);
+    var evt = new browser.contentWindow.CustomEvent('VSC_MESSAGE', {
+      detail: clonedDetail,
+    });
+    browser.contentDocument.documentElement.dispatchEvent(evt);
+  } catch (e) {
+    Components.utils.reportError('VSC popup: sendToContent failed: ' + e);
   }
 }
 

@@ -361,6 +361,44 @@ class VideoSpeedExtension {
   const extension = new VideoSpeedExtension();
   window.VSC_controller = extension;
 
+  // SPA-navigation safety net.
+  //
+  // YouTube, Twitter, Vimeo, etc. swap videos via history.pushState — no
+  // DOMContentLoaded refires. Our mutation observer SHOULD catch the new
+  // <video> element when the player container re-renders, but in practice
+  // it doesn't always (racing rebuilds, lazy media loaders, userscript
+  // reskins like VORAPIS V3 that rewrite the DOM aggressively).
+  //
+  // Poll location.href once per second. When it changes, wait 500 ms for
+  // the SPA to settle, then re-run a media scan and attach controllers to
+  // any video that doesn't already have one. Cheap and survives every SPA
+  // pattern that's stumped the mutation observer in testing.
+  let __vscLastUrl = location.href;
+  const __vscSpaPoll = setInterval(() => {
+    if (location.href === __vscLastUrl) return;
+    __vscLastUrl = location.href;
+    if (window.VSC && window.VSC.logger) {
+      window.VSC.logger.debug('SPA navigation detected — re-scanning for media');
+    }
+    setTimeout(() => {
+      try {
+        if (!extension.mediaObserver) return;
+        const media = extension.mediaObserver.scanForMedia(document);
+        media.forEach((m) => {
+          if (!m.vsc) {
+            extension.onVideoFound(m, m.parentElement || m.parentNode);
+          }
+        });
+      } catch (e) {
+        if (window.VSC && window.VSC.logger) {
+          window.VSC.logger.error('SPA-nav rescan failed: ' + e.message);
+        }
+      }
+    }, 500);
+  }, 1000);
+  // Best-effort cleanup when the page unloads.
+  window.addEventListener('unload', () => clearInterval(__vscSpaPoll), { once: true });
+
   document.documentElement.addEventListener('VSC_MESSAGE', (event) => {
     const message = event.detail;
 

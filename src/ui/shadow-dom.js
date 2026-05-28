@@ -148,28 +148,58 @@ class ShadowDOMManager {
     var doc = wrapper.ownerDocument;
     this.ensureCSS(doc);
 
+    // lockSize() applies JS-inline !important rules. This is the ultimate
+    // cascade weapon: JS-applied inline !important outranks every author
+    // stylesheet rule, including userscript reskins that set !important on
+    // our class chain via injected CSS. Used here to hold the controller's
+    // critical sizing properties against hostile sites like VORAPIS V3 on
+    // YouTube which otherwise shrinks the controller to ~5px.
+    var lockSize = function(el, props) {
+      for (var p in props) {
+        if (Object.prototype.hasOwnProperty.call(props, p)) {
+          el.style.setProperty(p, props[p], 'important');
+        }
+      }
+    };
+
     // Inner container replaces shadow root
     var inner = doc.createElement('div');
     inner.className = 'vsc-controller-inner';
     wrapper.appendChild(inner);
 
-    // Controller div
+    // Controller div \u2014 base font-size/line-height locked inline because
+    // children that inherit (or use em) all anchor to this value.
     var controller = doc.createElement('div');
     controller.className = 'vsc-ctrl';
     controller.style.cssText = 'top:' + top + '; left:' + left + '; opacity:' + opacity + ';';
+    lockSize(controller, {
+      'font-size': '13px',
+      'line-height': '18px',
+      'display': 'inline-block',
+    });
 
     // Draggable speed indicator
     var draggable = doc.createElement('span');
     draggable.setAttribute('data-action', 'drag');
     draggable.className = 'vsc-draggable';
-    draggable.style.cssText = 'font-size: ' + buttonSize + 'px;';
     draggable.textContent = speed;
+    lockSize(draggable, {
+      'font-size': '13px',
+      'line-height': '20px',
+      'width': '40px',
+      'height': '20px',
+      'display': 'inline-flex',
+    });
     controller.appendChild(draggable);
 
-    // Controls span
+    // Controls span \u2014 display is NOT locked here because it toggles between
+    // none/inline-flex on hover via the stylesheet.
     var controls = doc.createElement('span');
     controls.className = 'vsc-controls';
-    controls.style.cssText = 'font-size: ' + buttonSize + 'px; line-height: ' + buttonSize + 'px;';
+    lockSize(controls, {
+      'font-size': '13px',
+      'line-height': '18px',
+    });
 
     // Buttons
     var buttons = [
@@ -185,6 +215,12 @@ class ShadowDOMManager {
       button.setAttribute('data-action', btnConfig.action);
       button.className = 'vsc-btn' + (btnConfig.cls ? ' ' + btnConfig.cls : '');
       button.textContent = btnConfig.text;
+      lockSize(button, {
+        'font-size': '13px',
+        'line-height': '18px',
+        'padding': '1px 5px 3px 5px',
+        'display': 'inline-block',
+      });
       controls.appendChild(button);
     });
 
