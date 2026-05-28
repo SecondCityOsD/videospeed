@@ -198,6 +198,25 @@ class VideoController {
       this.video
     );
 
+    // VORAPIS-V3 / hostile-userscript escape hatch.
+    //
+    // If any ancestor of the planned insertion point has a CSS `transform`
+    // (other than `none`) or a non-default `zoom`, our absolutely-positioned
+    // controller is rendered inside that transformed subtree and visually
+    // scaled to match. No CSS rule applied to the child can override this —
+    // transform composes onto descendants by definition. The only way out is
+    // to insert outside the transformed subtree entirely. We re-parent to
+    // document.body and switch to fixed positioning with viewport-relative
+    // coordinates computed from the video's getBoundingClientRect.
+    if (this._hasTransformedAncestor(positioning.insertionPoint, document)) {
+      window.VSC.logger.warn(
+        'Transformed ancestor detected — re-parenting controller to document.body'
+      );
+      document.body.appendChild(fragment);
+      this._setupViewportTracking();
+      return;
+    }
+
     switch (positioning.insertionMethod) {
       case 'beforeParent':
         positioning.insertionPoint.parentElement.insertBefore(fragment, positioning.insertionPoint);
@@ -217,6 +236,94 @@ class VideoController {
     }
 
     window.VSC.logger.debug(`Controller inserted using ${positioning.insertionMethod} method`);
+  }
+
+  /**
+   * Walk up from an element checking each ancestor's computed style for
+   * a non-default `transform` or `zoom`. Returns true if any is found.
+   * Stops at document.documentElement.
+   * @private
+   */
+  _hasTransformedAncestor(el, doc) {
+    let node = el;
+    const root = doc.documentElement;
+    while (node && node !== root) {
+      let style;
+      try {
+        style = node.ownerDocument.defaultView.getComputedStyle(node);
+      } catch (e) {
+        return false;
+      }
+      if (style.transform && style.transform !== 'none') {
+        return true;
+      }
+      // `zoom` is non-standard but widely shipped. Computed value is the
+      // resolved number or 'normal'.
+      if (style.zoom && style.zoom !== '1' && style.zoom !== 'normal') {
+        return true;
+      }
+      node = node.parentElement;
+    }
+    return false;
+  }
+
+  /**
+   * Switch the wrapper to viewport-relative positioning and keep it pinned
+   * to the video's on-screen rect via getBoundingClientRect updates on
+   * scroll/resize/ResizeObserver tick + a 500 ms interval as a safety net
+   * for animated ancestor transforms.
+   *
+   * Tracked timers/observers are stored on `this` so `remove()` can clean
+   * them up.
+   * @private
+   */
+  _setupViewportTracking() {
+    const wrapper = this.div;
+    if (!wrapper) return;
+
+    // position:fixed escapes ancestor `transform` only if no ancestor of the
+    // fixed element has transform/filter/perspective — by inserting into
+    // document.body we've ensured that.
+    wrapper.style.setProperty('position', 'fixed', 'important');
+
+    // Suppress the absolute-position fallback styles seeded by initializeControls.
+    wrapper.style.setProperty('top', '0px', 'important');
+    wrapper.style.setProperty('left', '0px', 'important');
+
+    const update = () => {
+      try {
+        if (!this.video || !this.video.isConnected) return;
+        const rect = this.video.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) return;
+        wrapper.style.setProperty('top', rect.top + 'px', 'important');
+        wrapper.style.setProperty('left', rect.left + 'px', 'important');
+      } catch (e) {
+        // video may have been removed; let remove() clean up later
+      }
+    };
+    update();
+
+    this._viewportUpdate = update;
+
+    // scroll: use capture so we catch any scrollable ancestor's scroll too
+    window.addEventListener('scroll', update, true);
+    window.addEventListener('resize', update);
+
+    if (typeof window.ResizeObserver === 'function') {
+      try {
+        this._resizeObserver = new window.ResizeObserver(update);
+        this._resizeObserver.observe(this.video);
+      } catch (e) {
+        // ResizeObserver not available on this Pale Moon build
+      }
+    }
+
+    // Fallback poll — covers animated transforms and ancestor mutations the
+    // observer/scroll listeners don't catch. 500 ms is unnoticeable and the
+    // work is cheap (a getBoundingClientRect plus two style writes).
+    this._viewportPoll = setInterval(update, 500);
+
+    window.VSC.logger.debug('Controller using viewport tracking (transformed-ancestor escape)');
   }
 
   /**
@@ -279,6 +386,21 @@ class VideoController {
    */
   remove() {
     window.VSC.logger.debug('Removing VideoController');
+
+    // Tear down viewport tracking if it was activated.
+    if (this._viewportUpdate) {
+      window.removeEventListener('scroll', this._viewportUpdate, true);
+      window.removeEventListener('resize', this._viewportUpdate);
+      this._viewportUpdate = null;
+    }
+    if (this._resizeObserver) {
+      try { this._resizeObserver.disconnect(); } catch (e) { /* ignored */ }
+      this._resizeObserver = null;
+    }
+    if (this._viewportPoll) {
+      clearInterval(this._viewportPoll);
+      this._viewportPoll = null;
+    }
 
     // Remove DOM element
     if (this.div && this.div.parentNode) {
