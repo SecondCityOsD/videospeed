@@ -1,7 +1,14 @@
 /**
  * Video Controller class for managing individual video elements
- * Modular architecture using global variables
+ *
  */
+
+// UXP: the fork loads every module as its own classic <script> in page scope;
+// upstream gets one esbuild IIFE around the whole bundle. This wrapper keeps
+// top-level bindings out of the page's global lexical scope, where a site
+// script declaring the same name would throw a redeclaration SyntaxError.
+(function () {
+'use strict';
 
 window.VSC = window.VSC || {};
 
@@ -16,22 +23,32 @@ class VideoController {
     this.parent = target.parentElement || parent;
     this.config = config;
     this.actionHandler = actionHandler;
+    // Lifecycle decisions come from the document coordinator, which shares
+    // desired authority while keeping conflict state keyed by media element.
+    // Standalone construction only uses lifecycle reads, so a local fallback
+    // remains safe for controller-only tests.
+    this.arbitration =
+      (actionHandler && actionHandler.eventManager && actionHandler.eventManager.arbitration) ||
+      new window.VSC.SpeedArbitration(config, null);
     this.controlsManager = new window.VSC.ControlsManager(actionHandler, config);
     this.shouldStartHidden = shouldStartHidden;
 
     // Generate unique controller ID for badge tracking
     this.controllerId = this.generateControllerId(target);
 
-    // Transient per-instance state (not persisted).
-    //   speedBeforeReset    — set when R toggles to 1.0; restored on next R
-    //   positionBeforeJump  — set when J jumps to a mark; restored on next J
-    // Must be `null` (not undefined) so the `!== null` checks in
-    // action-handler.js resetSpeed / jumpToMark take the right branch.
+    // Transient reset memory (not persisted, instance-specific)
     this.speedBeforeReset = null;
     this.positionBeforeJump = null;
 
-    // Tracking is handled by inject.js → window.VSC.stateManager.registerController
-    // after the constructor returns; no per-config registration needed any more.
+    // Attach controller to video element first (needed for adjustSpeed)
+    target.vsc = this;
+
+    // Register with state manager immediately after controller is attached
+    if (window.VSC.stateManager) {
+      window.VSC.stateManager.registerController(this);
+    } else {
+      window.VSC.logger.error('StateManager not available during VideoController initialization');
+    }
 
     // Initialize speed
     this.initializeSpeed();
@@ -45,12 +62,9 @@ class VideoController {
     // Set up mutation observer for src changes
     this.setupMutationObserver();
 
-    // Attach controller to video element
-    target.vsc = this;
-
     window.VSC.logger.info('VideoController initialized for video element');
 
-    // Dispatch controller created event for badge management
+    // UXP: lifecycle event for the chrome overlay's toolbar badge.
     this.dispatchControllerEvent('VSC_CONTROLLER_CREATED', {
       controllerId: this.controllerId,
       videoSrc: this.video.currentSrc || this.video.src,
@@ -59,62 +73,66 @@ class VideoController {
   }
 
   /**
-   * Initialize video speed based on settings
+   * Initialize video speed based on settings.
+   *
+   * Lifecycle writes execute WRITE + SYNC_UI only — never PERSIST (cell 6,
+   * persistence purity I2): re-asserting existing authority must not
+   * refresh it or leak an initialization value into storage.
    * @private
    */
   initializeSpeed() {
-    const targetSpeed = this.getTargetSpeed();
-
-    window.VSC.logger.debug(`Setting initial playbackRate to: ${targetSpeed}`);
-
-    if (!this.actionHandler || targetSpeed === this.video.playbackRate) {
+    // Defer until metadata is loaded — setting playbackRate before the player
+    // has initialized can race with the site's own init sequence. Recompute
+    // the target at execution time because another player may claim a newer
+    // shared authority while this media is still loading.
+    if (this.video.readyState < 1) {
+      window.VSC.logger.debug('Deferring initializeSpeed until loadedmetadata');
+      this.handleLoadedMetadata = () => {
+        this.video.removeEventListener('loadedmetadata', this.handleLoadedMetadata);
+        this.handleLoadedMetadata = null;
+        this.applyLifecycleSpeed('loadedmetadata');
+      };
+      this.video.addEventListener('loadedmetadata', this.handleLoadedMetadata);
       return;
     }
 
-    // Defer until metadata loaded — setting playbackRate before the player
-    // has initialized can race with the site's own init sequence.
-    // source:'init' tells setSpeed not to update lastSpeed (it's a lifecycle
-    // restore, not a user choice).
-    if (this.video.readyState < 1) {
-      const handler = () => {
-        this.video.removeEventListener('loadedmetadata', handler);
-        if (targetSpeed !== this.video.playbackRate) {
-          this.actionHandler.adjustSpeed(this.video, targetSpeed, { source: 'init' });
-        }
-      };
-      this.video.addEventListener('loadedmetadata', handler);
-    } else {
-      this.actionHandler.adjustSpeed(this.video, targetSpeed, { source: 'init' });
-    }
+    this.applyLifecycleSpeed('initializeSpeed');
   }
 
   /**
-   * Compute the target speed for initialization or lifecycle restore.
-   *
-   * Priority:
-   *   1. siteDefaultSpeed (per-site rule) — always wins if configured
-   *   2. lastSpeed (in-session user choice OR persisted from rememberSpeed)
-   *   3. 1.0 fallback
-   *
-   * Pure read of config.settings — no side effects. Called by initializeSpeed
-   * AND by mediaEventAction (play/seeked), so settings updates between create
-   * and event time (via the live-settings hot-reload) are honoured.
-   *
-   * @returns {number}
+   * Execute a lifecycle write only while this controller remains attached.
+   * @param {string} eventType
+   * @private
    */
-  getTargetSpeed() {
-    if (this.config.settings.siteDefaultSpeed) {
-      return this.config.settings.siteDefaultSpeed;
+  applyLifecycleSpeed(eventType) {
+    if (this.video.vsc !== this || !this.actionHandler) {
+      return;
     }
-    // In-session lastSpeed is honoured regardless of rememberSpeed —
-    // rememberSpeed only governs PERSISTENCE across page loads.
-    if (
-      this.config.settings.lastSpeed != null &&
-      Math.abs(this.config.settings.lastSpeed - 1.0) > 0.05
-    ) {
-      return this.config.settings.lastSpeed;
+
+    // Mark the (re)initialization moment before deciding whether to write:
+    // sites commonly answer this phase with their own playbackRate = 1.0,
+    // which must not read as a user's menu choice even when no restore was
+    // needed (classifier MEDIA_INIT_GRACE_MS).
+    if (eventType === 'initializeSpeed' || eventType === 'loadedmetadata') {
+      if (this.arbitration.classifier) {
+        this.arbitration.classifier.observeMediaInit(this.video, performance.now());
+      }
     }
-    return 1.0;
+
+    const targetSpeed = this.arbitration.lifecycleTarget(this.video);
+    if (targetSpeed === null) {
+      window.VSC.logger.debug(
+        `${eventType}: no authoritative target, leaving playbackRate=${this.video.playbackRate}`
+      );
+      return;
+    }
+    if (targetSpeed === this.video.playbackRate) {
+      return;
+    }
+
+    window.VSC.logger.info(`${eventType}: restoring speed to ${targetSpeed}`);
+    this.actionHandler.writeRate(this.video, targetSpeed);
+    this.actionHandler.syncIndicator(this.video, targetSpeed);
   }
 
   /**
@@ -123,6 +141,12 @@ class VideoController {
    * @private
    */
   initializeControls() {
+    // UXP-INTERIM (until the controller-UI phase): the fork's 0.10.2 wrapper —
+    // a plain-DOM div positioned inline before insertion. Upstream 0.11 moves
+    // positioning into CSS (wrapper gets z-index only; the inner controller is
+    // offset after insertion), which has to land together with the
+    // shadow-dom.js / controller-css-defaults.js port and must be reconciled
+    // with the transformed-ancestor escape below.
     window.VSC.logger.debug('initializeControls Begin');
 
     const document = this.video.ownerDocument;
@@ -198,7 +222,7 @@ class VideoController {
       this.video
     );
 
-    // VORAPIS-V3 / hostile-userscript escape hatch.
+    // UXP: VORAPIS-V3 / hostile-userscript escape hatch.
     //
     // If any ancestor of the planned insertion point has a CSS `transform`
     // (other than `none`) or a non-default `zoom`, our absolutely-positioned
@@ -213,7 +237,7 @@ class VideoController {
         'Transformed ancestor detected — re-parenting controller to document.body'
       );
       document.body.appendChild(fragment);
-      this._setupViewportTracking();
+      this._setupViewportTracking(wrapper);
       return;
     }
 
@@ -273,12 +297,17 @@ class VideoController {
    * scroll/resize/ResizeObserver tick + a 500 ms interval as a safety net
    * for animated ancestor transforms.
    *
+   * Takes the wrapper explicitly: this runs from insertIntoDOM() while
+   * initializeControls() is still building the controller, before the
+   * constructor has assigned this.div (reading this.div here made the whole
+   * escape a silent no-op).
+   *
    * Tracked timers/observers are stored on `this` so `remove()` can clean
    * them up.
+   * @param {HTMLElement} wrapper - Controller wrapper just inserted into <body>
    * @private
    */
-  _setupViewportTracking() {
-    const wrapper = this.div;
+  _setupViewportTracking(wrapper) {
     if (!wrapper) return;
 
     // position:fixed escapes ancestor `transform` only if no ancestor of the
@@ -375,26 +404,41 @@ class VideoController {
    */
   setupEventHandlers() {
     const mediaEventAction = (event) => {
-      // Read target at event time so live-settings updates between controller
-      // creation and event firing are honoured.
-      const targetSpeed = this.getTargetSpeed();
-      window.VSC.logger.debug(`Media event ${event.type}: restoring speed to ${targetSpeed}`);
-      // source:'init' — lifecycle restore, do not pollute lastSpeed.
-      this.actionHandler.adjustSpeed(event.target, targetSpeed, { source: 'init' });
+      this.applyLifecycleSpeed(event.type);
     };
 
+    // Bind event handlers. Seek evidence is recorded before the readyState
+    // restore guard so initialization-time seeks can explain a 1.0 reset.
     this.handlePlay = mediaEventAction.bind(this);
-    // Don't restore on seeked if the player hasn't loaded data yet —
-    // it may still be initializing and writing playbackRate now would race.
+    this.handleSeekEvidence = (event) => {
+      if (this.arbitration.classifier) {
+        this.arbitration.classifier.observeSeek(this.video, event.timeStamp);
+      }
+    };
     this.handleSeek = (event) => {
+      this.handleSeekEvidence(event);
       if (event.target.readyState < 2) {
         return;
       }
       mediaEventAction.call(this, event);
     };
+    this.handleMediaInit = (event) => {
+      this.arbitration.clearEchoTransaction(this.video);
+      if (this.arbitration.classifier) {
+        this.arbitration.classifier.observeMediaInit(this.video, event.timeStamp);
+      }
+    };
 
+    // `seeking` covers resets during an active seek; `seeked` refreshes the
+    // evidence window after slow seeks while retaining its lifecycle restore.
+    // `loadstart` marks a resource boundary on a reused element; ordinary MSE
+    // representation switches need not emit it.
     this.video.addEventListener('play', this.handlePlay);
+    this.video.addEventListener('seeking', this.handleSeekEvidence);
     this.video.addEventListener('seeked', this.handleSeek);
+    this.video.addEventListener('loadstart', this.handleMediaInit);
+
+    window.VSC.logger.debug('Added media event handlers: play, seeking, seeked, loadstart');
   }
 
   /**
@@ -408,7 +452,7 @@ class VideoController {
           mutation.type === 'attributes' &&
           (mutation.attributeName === 'src' || mutation.attributeName === 'currentSrc')
         ) {
-          window.VSC.logger.debug('mutation of A/V element');
+          window.VSC.logger.debug('Mutation of A/V element detected');
           const controller = this.div;
           if (!mutation.target.src && !mutation.target.currentSrc) {
             controller.classList.add('vsc-nosource');
@@ -430,7 +474,15 @@ class VideoController {
   remove() {
     window.VSC.logger.debug('Removing VideoController');
 
-    // Tear down viewport tracking if it was activated.
+    // A detached controller must not be retained or mutated by a pending
+    // visibility flash callback after its media/controller lifecycle ends.
+    if (this.div && this.div.flashTimer !== undefined) {
+      clearTimeout(this.div.flashTimer);
+      this.div.flashTimer = undefined;
+    }
+
+    // UXP: tear down viewport tracking if the transformed-ancestor escape
+    // activated it.
     if (this._viewportUpdate) {
       window.removeEventListener('scroll', this._viewportUpdate, true);
       window.removeEventListener('resize', this._viewportUpdate);
@@ -458,9 +510,23 @@ class VideoController {
     // Remove event listeners
     if (this.handlePlay) {
       this.video.removeEventListener('play', this.handlePlay);
+      this.handlePlay = null;
     }
     if (this.handleSeek) {
       this.video.removeEventListener('seeked', this.handleSeek);
+      this.handleSeek = null;
+    }
+    if (this.handleSeekEvidence) {
+      this.video.removeEventListener('seeking', this.handleSeekEvidence);
+      this.handleSeekEvidence = null;
+    }
+    if (this.handleMediaInit) {
+      this.video.removeEventListener('loadstart', this.handleMediaInit);
+      this.handleMediaInit = null;
+    }
+    if (this.handleLoadedMetadata) {
+      this.video.removeEventListener('loadedmetadata', this.handleLoadedMetadata);
+      this.handleLoadedMetadata = null;
     }
 
     // Disconnect mutation observer
@@ -468,14 +534,19 @@ class VideoController {
       this.targetObserver.disconnect();
     }
 
-    // Unregister from the state manager. remove() is reached both via
-    // inject.js → onVideoRemoved AND directly from the mutation observer
-    // (Apple TV path, and the "became invalid" recheck). Unregistering here
-    // too guarantees no stale registry entry survives for a reused <video> —
-    // a stale entry would otherwise make the popup/keyboard apply a speed
-    // change twice to the same element.
-    if (window.VSC.stateManager && this.controllerId) {
-      window.VSC.stateManager.unregisterController(this.controllerId);
+    // Remove from state manager
+    if (window.VSC.stateManager) {
+      window.VSC.stateManager.removeController(this.controllerId);
+    }
+
+    // Release per-media conflict/timer/echo state before detaching the
+    // controller reference that EventManager uses to identify controlled media.
+    const arbitration =
+      this.actionHandler &&
+      this.actionHandler.eventManager &&
+      this.actionHandler.eventManager.arbitration;
+    if (arbitration) {
+      arbitration.release(this.video);
     }
 
     // Remove reference from video element
@@ -483,7 +554,7 @@ class VideoController {
 
     window.VSC.logger.debug('VideoController removed successfully');
 
-    // Dispatch controller removed event for badge management
+    // UXP: lifecycle event for the chrome overlay's toolbar badge.
     this.dispatchControllerEvent('VSC_CONTROLLER_REMOVED', {
       controllerId: this.controllerId,
       videoSrc: this.video.currentSrc || this.video.src,
@@ -508,7 +579,8 @@ class VideoController {
       return hash & hash; // Convert to 32-bit integer
     }, 0);
 
-    return `${tagName}-${Math.abs(srcHash)}-${timestamp}`;
+    const random = Math.floor(Math.random() * 1000);
+    return `${tagName}-${Math.abs(srcHash)}-${timestamp}-${random}`;
   }
 
   /**
@@ -541,6 +613,9 @@ class VideoController {
    * Called when video visibility changes
    */
   updateVisibility() {
+    // UXP-INTERIM (until the controller-UI phase): keeps the 0.10.2
+    // `vsc-manual` guard that the interim V toggle relies on. Upstream keeps
+    // this automatic layer independent of the explicit override.
     const isVisible = this.isVideoVisible();
     const isCurrentlyHidden = this.div.classList.contains('vsc-hidden');
 
@@ -582,8 +657,8 @@ class VideoController {
   }
 
   /**
-   * Dispatch controller lifecycle events for badge management
-   * @param {string} eventType - Event type (VSC_CONTROLLER_CREATED or VSC_CONTROLLER_REMOVED)
+   * UXP: dispatch controller lifecycle events for the toolbar badge.
+   * @param {string} eventType - VSC_CONTROLLER_CREATED or VSC_CONTROLLER_REMOVED
    * @param {Object} detail - Event detail data
    * @private
    */
@@ -606,3 +681,5 @@ class VideoController {
 window.VSC.VideoController = VideoController;
 
 // Global variables available for both browser and testing
+
+})();

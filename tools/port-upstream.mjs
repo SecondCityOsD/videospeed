@@ -13,6 +13,11 @@
 //
 // Every edit's `from` text must occur exactly once in the upstream file, so on
 // the next upstream upgrade the failures are that file's porting to-do list.
+// An edit is either [from, to] (replace that exact text) or
+// { from, through, to } (replace the span from the start of `from` to the end
+// of `through`, each matching exactly once — for whole blocks whose body would
+// be error-prone to transcribe). Edits apply in order, each to the result of
+// the previous one.
 // Default upstream tree: ../videospeed-0.11.1/src next to this repository.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -34,7 +39,7 @@ const IIFE_CLOSE = `
 const DEFAULT_ANCHOR = 'window.VSC = window.VSC || {};';
 
 // ---------------------------------------------------------------------------
-// Registry: upstream-relative path → { anchor?, edits: [[from, to], ...] }
+// Registry: upstream-relative path → { anchor?, edits: [edit, ...] }
 // ---------------------------------------------------------------------------
 const PORTS = {
   'core/arbiter.js': {
@@ -402,6 +407,630 @@ if (typeof window.requestIdleCallback === 'undefined') {
       ],
     ],
   },
+
+  'core/settings.js': {
+    edits: [
+      [
+        `        // null = bridge signaled abort (site disabled/blacklisted)
+        if (storage === null) {
+          this.settings._abort = true;
+          return;
+        }
+
+        this._loaded = true;`,
+        `        // null = bridge signaled abort (site disabled/blacklisted)
+        if (storage === null) {
+          this.settings._abort = true;
+          return;
+        }
+
+        // UXP: global disable. The chrome layer skips injection entirely when
+        // the extension is disabled (upstream's bridge strips \`enabled\` and
+        // aborts instead), but if a document somehow received our scripts,
+        // bail cleanly here — inject.js honors settings._abort.
+        if (storage.enabled === false) {
+          this.settings._abort = true;
+          window.VSC.logger.info('Extension disabled globally — aborting init');
+          return;
+        }
+
+        this._loaded = true;`,
+      ],
+      {
+        from: '        // Migrate legacy blacklist → siteRules (one-shot)',
+        through:
+          '              `Site rule matched: pattern="${matched.pattern}", speed=${matched.speed}`\n            );\n          }\n        }',
+        to: `        // UXP: blacklist and siteRules are resolved in the privileged chrome
+        // layer (overlay.js): disabled sites are never injected, the legacy
+        // blacklist → siteRules migration runs there, and the page world never
+        // receives the raw rules (privacy). Instead of upstream's
+        // matchSiteRule() call here, the chrome side seeds an already-matched
+        // \`siteDefaultSpeed\`.
+        // Reset first: without this, siteDefaultSpeed is sticky across load()
+        // calls — invisible in production (fresh process per page load) but a
+        // real leak in any long-lived context, and load() below would seed
+        // lastSpeed from a stale rule.
+        this.settings.siteDefaultSpeed = null;
+        if (typeof storage.siteDefaultSpeed === 'number') {
+          this.settings.siteDefaultSpeed = storage.siteDefaultSpeed;
+          window.VSC.logger.info(\`Site rule matched: speed=\${storage.siteDefaultSpeed}\`);
+        }`,
+      },
+      [
+        "        this.settings.customCSS = storage.customCSS ?? '';",
+        "        this.settings.customCSS = (storage.customCSS != null) ? storage.customCSS : '';",
+      ],
+    ],
+  },
+
+  'utils/event-manager.js': {
+    edits: [
+      [
+        `    try {
+      if (window.VSC.inIframe()) {
+        docs.push(window.top.document);
+      }
+    } catch {
+      // Cross-origin iframe - ignore
+    }`,
+        `    try {
+      // UXP: upstream calls window.VSC.inIframe(), which dom-utils never
+      // defines (the helper is DomUtils.inIframe), so the TypeError lands in
+      // this catch and same-origin frames silently lose top-document
+      // shortcuts. Call the real helper.
+      if (window.VSC.DomUtils.inIframe()) {
+        docs.push(window.top.document);
+      }
+    } catch (e) {
+      // Cross-origin iframe - ignore
+    }`,
+      ],
+      [
+        '        const bKey = b.keyCode ?? b.key;',
+        '        const bKey = (b.keyCode != null) ? b.keyCode : b.key;',
+      ],
+      [
+        '        return (b.keyCode ?? b.key) === keyCode;',
+        '        return ((b.keyCode != null) ? b.keyCode : b.key) === keyCode;',
+      ],
+      [
+        `  setupUserGestureListener(document) {
+    const clickHandler = (event) => {`,
+        `  setupUserGestureListener(document) {
+    // UXP: the controller is plain DOM, so match the \`.vsc-controller\`
+    // wrapper class where upstream tests for its \`<vsc-controller>\` tag.
+    const isOwnController = (target) =>
+      !!(target && target.closest && target.closest('.vsc-controller'));
+    const clickHandler = (event) => {`,
+      ],
+      [
+        `      // Skip clicks on our own controller (shadow host retargeted at boundary)
+      if (event.target?.closest?.('vsc-controller')) {`,
+        `      // Skip clicks on our own controller (shadow host retargeted at boundary)
+      if (isOwnController(event.target)) {`,
+      ],
+      [
+        "      if (event.target?.closest?.('vsc-controller')) {",
+        '      if (isOwnController(event.target)) {',
+      ],
+      [
+        '    const resolved = window.VSC.siteHandlerManager?.resolveGestureMedia?.(event, mediaElements);',
+        `    const siteHandlerManager = window.VSC.siteHandlerManager;
+    const resolved =
+      siteHandlerManager != null && siteHandlerManager.resolveGestureMedia != null
+        ? siteHandlerManager.resolveGestureMedia(event, mediaElements)
+        : undefined;`,
+      ],
+    ],
+  },
+
+  'core/action-handler.js': {
+    edits: [
+      [
+        '      targetController = e.target.getRootNode().host;',
+        `      // UXP: the controller is plain DOM — there is no shadow root to climb
+      // out of, so find the owning \`.vsc-controller\` wrapper directly. Like
+      // upstream's getRootNode().host, tolerate non-Element targets (a key
+      // event dispatched at the document has no closest()).
+      const target = e.target;
+      targetController =
+        target && typeof target.closest === 'function' ? target.closest('.vsc-controller') : null;`,
+      ],
+      ['      const controller = v.vsc?.div;', '      const controller = v.vsc && v.vsc.div;'],
+      [
+        `      case 'reset':
+        window.VSC.logger.debug('Reset speed');
+        this.resetSpeed(video, value, this.config.getKeyBinding('fast'), options);
+        break;`,
+        `      case 'reset':
+        // UXP fork deviation (user decision): R is a literal "reset to target"
+        // (default 1.0). Upstream routes R through resetSpeed(), which
+        // remembers the previous speed and cross-toggles with the 'fast'
+        // preset; the fork found that confusing and sets the target directly.
+        // Still a USER_SET, so it claims authority like every VSC command.
+        window.VSC.logger.debug('Reset speed');
+        this.adjustSpeed(video, value, { authorityBatch: options.authorityBatch });
+        break;`,
+      ],
+      {
+        from: '  toggleControllerVisibility(video) {',
+        through: `    if (nextOverride !== null) {
+      controller.dataset.vscVisibility = nextOverride;
+    }
+  }`,
+        to: `  toggleControllerVisibility(video) {
+    // UXP-INTERIM (until the controller-UI phase ports the CSS): the fork's
+    // plain-DOM stylesheet does not render data-vsc-visibility yet, so the V
+    // toggle keeps the 0.10.2 class logic. Upstream's
+    // ControllerVisibility.nextOverride() toggle replaces this with that port.
+    const controller = video.vsc && video.vsc.div;
+    if (!controller) {
+      window.VSC.logger.error('No controller found for video');
+      return;
+    }
+
+    if (controller.flashTimer !== undefined) {
+      clearTimeout(controller.flashTimer);
+      controller.flashTimer = undefined;
+    }
+
+    controller.classList.toggle('vsc-hidden');
+    controller.classList.add('vsc-manual');
+
+    if (controller.classList.contains('vsc-hidden')) {
+      controller.classList.remove('vsc-show');
+    }
+  }`,
+      },
+      {
+        from: '  flashController(controller, duration) {',
+        through:
+          '      window.VSC.logger.debug(`flashController skipped: ${reason}`);\n      return;\n    }',
+        to: `  flashController(controller, duration) {
+    // UXP-INTERIM (until the controller-UI phase): the 0.10.2 gate — startHidden
+    // and a manual V-hide block feedback. Upstream's
+    // ControllerVisibility.allowsFlash() gate replaces this with the CSS port.
+    if (this.config.settings.startHidden) {
+      window.VSC.logger.debug('flashController skipped: startHidden preference');
+      return;
+    }
+    if (
+      controller.classList.contains('vsc-manual') &&
+      controller.classList.contains('vsc-hidden')
+    ) {
+      window.VSC.logger.debug('flashController skipped: user hide');
+      return;
+    }`,
+      },
+      [
+        '    if (this.eventManager?.arbitration) {',
+        '    if (this.eventManager && this.eventManager.arbitration) {',
+      ],
+      [
+        '    if (video.playbackRate !== numericSpeed && this.eventManager?.arbitration) {',
+        `    if (
+      video.playbackRate !== numericSpeed &&
+      this.eventManager &&
+      this.eventManager.arbitration
+    ) {`,
+      ],
+      [
+        '    const speedIndicator = video.vsc?.speedIndicator;',
+        '    const speedIndicator = video.vsc && video.vsc.speedIndicator;',
+      ],
+      ['    if (video.vsc?.div) {', '    if (video.vsc && video.vsc.div) {'],
+    ],
+  },
+
+  'core/video-controller.js': {
+    edits: [
+      [
+        `    window.VSC.logger.info('VideoController initialized for video element');
+  }`,
+        `    window.VSC.logger.info('VideoController initialized for video element');
+
+    // UXP: lifecycle event for the chrome overlay's toolbar badge.
+    this.dispatchControllerEvent('VSC_CONTROLLER_CREATED', {
+      controllerId: this.controllerId,
+      videoSrc: this.video.currentSrc || this.video.src,
+      tagName: this.video.tagName,
+    });
+  }`,
+      ],
+      [
+        '      this.arbitration.classifier?.observeMediaInit(this.video, performance.now());',
+        `      if (this.arbitration.classifier) {
+        this.arbitration.classifier.observeMediaInit(this.video, performance.now());
+      }`,
+      ],
+      {
+        from: '  initializeControls() {',
+        through: "    window.VSC.logger.debug('initializeControls End');\n    return wrapper;\n  }",
+        to: `  initializeControls() {
+    // UXP-INTERIM (until the controller-UI phase): the fork's 0.10.2 wrapper —
+    // a plain-DOM div positioned inline before insertion. Upstream 0.11 moves
+    // positioning into CSS (wrapper gets z-index only; the inner controller is
+    // offset after insertion), which has to land together with the
+    // shadow-dom.js / controller-css-defaults.js port and must be reconciled
+    // with the transformed-ancestor escape below.
+    window.VSC.logger.debug('initializeControls Begin');
+
+    const document = this.video.ownerDocument;
+    const speed = this.video.playbackRate.toFixed(2);
+    const position = window.VSC.ShadowDOMManager.calculatePosition(this.video);
+
+    window.VSC.logger.debug(\`Speed variable set to: \${speed}\`);
+
+    // Create wrapper element
+    const wrapper = document.createElement('div');
+    wrapper.classList.add('vsc-controller');
+
+    // Set positioning styles with calculated position
+    // Use inline styles without !important so CSS rules can override
+    wrapper.style.cssText = \`
+      position: absolute !important;
+      z-index: 9999999 !important;
+      top: \${position.top};
+      left: \${position.left};
+    \`;
+
+    // Only hide controller if video has no source AND is not ready/functional
+    // This prevents hiding controllers for live streams or dynamically loaded videos
+    if (!this.video.currentSrc && !this.video.src && this.video.readyState < 2) {
+      wrapper.classList.add('vsc-nosource');
+    }
+
+    if (this.config.settings.startHidden || this.shouldStartHidden) {
+      wrapper.classList.add('vsc-hidden');
+      if (this.shouldStartHidden) {
+        window.VSC.logger.debug('Starting controller hidden due to video visibility/size');
+      }
+    } else {
+      // Ensure controller is visible, especially on YouTube
+      wrapper.classList.add('vsc-show');
+    }
+
+    // Create shadow DOM with relative positioning inside shadow root
+    const shadow = window.VSC.ShadowDOMManager.createShadowDOM(wrapper, {
+      top: '0px', // Position relative to shadow root since wrapper is already positioned
+      left: '0px', // Position relative to shadow root since wrapper is already positioned
+      speed: speed,
+      opacity: this.config.settings.controllerOpacity,
+      buttonSize: this.config.settings.controllerButtonSize,
+    });
+
+    // Set up control events
+    this.controlsManager.setupControlEvents(shadow, this.video);
+
+    // Store speed indicator reference
+    this.speedIndicator = window.VSC.ShadowDOMManager.getSpeedIndicator(shadow);
+
+    // Insert into DOM based on site-specific rules
+    this.insertIntoDOM(document, wrapper);
+
+    window.VSC.logger.debug('initializeControls End');
+    return wrapper;
+  }`,
+      },
+      [
+        `      this.video
+    );
+
+    switch (positioning.insertionMethod) {`,
+        `      this.video
+    );
+
+    // UXP: VORAPIS-V3 / hostile-userscript escape hatch.
+    //
+    // If any ancestor of the planned insertion point has a CSS \`transform\`
+    // (other than \`none\`) or a non-default \`zoom\`, our absolutely-positioned
+    // controller is rendered inside that transformed subtree and visually
+    // scaled to match. No CSS rule applied to the child can override this —
+    // transform composes onto descendants by definition. The only way out is
+    // to insert outside the transformed subtree entirely. We re-parent to
+    // document.body and switch to fixed positioning with viewport-relative
+    // coordinates computed from the video's getBoundingClientRect.
+    if (this._hasTransformedAncestor(positioning.insertionPoint, document)) {
+      window.VSC.logger.warn(
+        'Transformed ancestor detected — re-parenting controller to document.body'
+      );
+      document.body.appendChild(fragment);
+      this._setupViewportTracking(wrapper);
+      return;
+    }
+
+    switch (positioning.insertionMethod) {`,
+      ],
+      [
+        `  /**
+   * Set up event handlers for media events`,
+        `  /**
+   * Walk up from an element checking each ancestor's computed style for
+   * a non-default \`transform\` or \`zoom\`. Returns true if any is found.
+   * Stops at document.documentElement.
+   * @private
+   */
+  _hasTransformedAncestor(el, doc) {
+    let node = el;
+    const root = doc.documentElement;
+    while (node && node !== root) {
+      let style;
+      try {
+        style = node.ownerDocument.defaultView.getComputedStyle(node);
+      } catch (e) {
+        return false;
+      }
+      if (style.transform && style.transform !== 'none') {
+        return true;
+      }
+      // \`zoom\` is non-standard but widely shipped. Computed value is the
+      // resolved number or 'normal'.
+      if (style.zoom && style.zoom !== '1' && style.zoom !== 'normal') {
+        return true;
+      }
+      node = node.parentElement;
+    }
+    return false;
+  }
+
+  /**
+   * Switch the wrapper to viewport-relative positioning and keep it pinned
+   * to the video's on-screen rect via getBoundingClientRect updates on
+   * scroll/resize/ResizeObserver tick + a 500 ms interval as a safety net
+   * for animated ancestor transforms.
+   *
+   * Takes the wrapper explicitly: this runs from insertIntoDOM() while
+   * initializeControls() is still building the controller, before the
+   * constructor has assigned this.div (reading this.div here made the whole
+   * escape a silent no-op).
+   *
+   * Tracked timers/observers are stored on \`this\` so \`remove()\` can clean
+   * them up.
+   * @param {HTMLElement} wrapper - Controller wrapper just inserted into <body>
+   * @private
+   */
+  _setupViewportTracking(wrapper) {
+    if (!wrapper) return;
+
+    // position:fixed escapes ancestor \`transform\` only if no ancestor of the
+    // fixed element has transform/filter/perspective — by inserting into
+    // document.body we've ensured that.
+    wrapper.style.setProperty('position', 'fixed', 'important');
+
+    // Suppress the absolute-position fallback styles seeded by initializeControls.
+    wrapper.style.setProperty('top', '0px', 'important');
+    wrapper.style.setProperty('left', '0px', 'important');
+
+    const update = () => {
+      try {
+        if (!this.video || !this.video.isConnected) return;
+        const rect = this.video.getBoundingClientRect();
+        if (rect.width === 0 || rect.height === 0) return;
+        wrapper.style.setProperty('top', rect.top + 'px', 'important');
+        wrapper.style.setProperty('left', rect.left + 'px', 'important');
+      } catch (e) {
+        // video may have been removed; let remove() clean up later
+      }
+    };
+
+    // rAF-coalesced wrapper for the high-frequency listeners (scroll, resize,
+    // ResizeObserver): at most one getBoundingClientRect + style write per
+    // frame instead of one per event, so fast scrolling can't thrash layout.
+    let rafPending = false;
+    const scheduleUpdate = () => {
+      if (rafPending) return;
+      rafPending = true;
+      const run = () => {
+        rafPending = false;
+        update();
+      };
+      if (window.requestAnimationFrame) {
+        window.requestAnimationFrame(run);
+      } else {
+        window.setTimeout(run, 16);
+      }
+    };
+
+    update();
+
+    // The listeners are added with scheduleUpdate; remove() removes the same
+    // reference, so this must stay scheduleUpdate (not update).
+    this._viewportUpdate = scheduleUpdate;
+
+    // scroll: use capture so we catch any scrollable ancestor's scroll too
+    window.addEventListener('scroll', scheduleUpdate, true);
+    window.addEventListener('resize', scheduleUpdate);
+
+    if (typeof window.ResizeObserver === 'function') {
+      try {
+        this._resizeObserver = new window.ResizeObserver(scheduleUpdate);
+        this._resizeObserver.observe(this.video);
+      } catch (e) {
+        // ResizeObserver not available on this Pale Moon build
+      }
+    }
+
+    // Fullscreen escape. When the site fullscreens its player container, a
+    // controller parented to <body> sits OUTSIDE the fullscreened subtree and
+    // becomes invisible — exactly when the user wants speed control. On
+    // fullscreenchange, move the wrapper into the fullscreen element, and back
+    // to <body> on exit. (Goanna exposes both prefixed and unprefixed APIs.)
+    const onFsChange = () => {
+      try {
+        const fsEl = document.fullscreenElement || document.mozFullScreenElement || null;
+        if (fsEl && wrapper.parentNode !== fsEl) {
+          fsEl.appendChild(wrapper);
+        } else if (!fsEl && wrapper.parentNode !== document.body) {
+          document.body.appendChild(wrapper);
+        }
+        update();
+      } catch (e) {
+        // ignored
+      }
+    };
+    this._fsChange = onFsChange;
+    document.addEventListener('fullscreenchange', onFsChange, true);
+    document.addEventListener('mozfullscreenchange', onFsChange, true);
+
+    // Fallback poll — covers animated transforms and ancestor mutations the
+    // observer/scroll listeners don't catch. 500 ms is unnoticeable and the
+    // work is cheap (a getBoundingClientRect plus two style writes).
+    this._viewportPoll = setInterval(update, 500);
+
+    window.VSC.logger.debug('Controller using viewport tracking (transformed-ancestor escape)');
+  }
+
+  /**
+   * Set up event handlers for media events`,
+      ],
+      [
+        '      this.arbitration.classifier?.observeSeek(this.video, event.timeStamp);',
+        `      if (this.arbitration.classifier) {
+        this.arbitration.classifier.observeSeek(this.video, event.timeStamp);
+      }`,
+      ],
+      [
+        '      this.arbitration.classifier?.observeMediaInit(this.video, event.timeStamp);',
+        `      if (this.arbitration.classifier) {
+        this.arbitration.classifier.observeMediaInit(this.video, event.timeStamp);
+      }`,
+      ],
+      [
+        '    if (this.div?.flashTimer !== undefined) {',
+        '    if (this.div && this.div.flashTimer !== undefined) {',
+      ],
+      [
+        `    // Remove DOM element
+    if (this.div && this.div.parentNode) {`,
+        `    // UXP: tear down viewport tracking if the transformed-ancestor escape
+    // activated it.
+    if (this._viewportUpdate) {
+      window.removeEventListener('scroll', this._viewportUpdate, true);
+      window.removeEventListener('resize', this._viewportUpdate);
+      this._viewportUpdate = null;
+    }
+    if (this._resizeObserver) {
+      try { this._resizeObserver.disconnect(); } catch (e) { /* ignored */ }
+      this._resizeObserver = null;
+    }
+    if (this._viewportPoll) {
+      clearInterval(this._viewportPoll);
+      this._viewportPoll = null;
+    }
+    if (this._fsChange) {
+      document.removeEventListener('fullscreenchange', this._fsChange, true);
+      document.removeEventListener('mozfullscreenchange', this._fsChange, true);
+      this._fsChange = null;
+    }
+
+    // Remove DOM element
+    if (this.div && this.div.parentNode) {`,
+      ],
+      [
+        '    this.actionHandler?.eventManager?.arbitration?.release(this.video);',
+        `    const arbitration =
+      this.actionHandler &&
+      this.actionHandler.eventManager &&
+      this.actionHandler.eventManager.arbitration;
+    if (arbitration) {
+      arbitration.release(this.video);
+    }`,
+      ],
+      [
+        `    window.VSC.logger.debug('VideoController removed successfully');
+  }`,
+        `    window.VSC.logger.debug('VideoController removed successfully');
+
+    // UXP: lifecycle event for the chrome overlay's toolbar badge.
+    this.dispatchControllerEvent('VSC_CONTROLLER_REMOVED', {
+      controllerId: this.controllerId,
+      videoSrc: this.video.currentSrc || this.video.src,
+      tagName: this.video.tagName,
+    });
+  }`,
+      ],
+      {
+        from: '  updateVisibility() {',
+        through:
+          "      window.VSC.logger.debug('Hiding controller - video became invisible');\n    }\n  }",
+        to: `  updateVisibility() {
+    // UXP-INTERIM (until the controller-UI phase): keeps the 0.10.2
+    // \`vsc-manual\` guard that the interim V toggle relies on. Upstream keeps
+    // this automatic layer independent of the explicit override.
+    const isVisible = this.isVideoVisible();
+    const isCurrentlyHidden = this.div.classList.contains('vsc-hidden');
+
+    // Special handling for audio elements - don't hide controllers for functional audio
+    if (this.video.tagName === 'AUDIO') {
+      // For audio, only hide if manually hidden or if audio support is disabled
+      if (!this.config.settings.audioBoolean && !isCurrentlyHidden) {
+        this.div.classList.add('vsc-hidden');
+        window.VSC.logger.debug('Hiding audio controller - audio support disabled');
+      } else if (
+        this.config.settings.audioBoolean &&
+        isCurrentlyHidden &&
+        !this.div.classList.contains('vsc-manual')
+      ) {
+        // Show audio controller if audio support is enabled and not manually hidden
+        this.div.classList.remove('vsc-hidden');
+        window.VSC.logger.debug('Showing audio controller - audio support enabled');
+      }
+      return;
+    }
+
+    // Original logic for video elements
+    if (
+      isVisible &&
+      isCurrentlyHidden &&
+      !this.div.classList.contains('vsc-manual') &&
+      // Respect the user's \`startHidden\` preference as a hard floor — never
+      // auto-show the controller if they've asked for it to start hidden.
+      !this.config.settings.startHidden
+    ) {
+      // Video became visible and controller is hidden (but not manually hidden)
+      this.div.classList.remove('vsc-hidden');
+      window.VSC.logger.debug('Showing controller - video became visible');
+    } else if (!isVisible && !isCurrentlyHidden) {
+      // Video became invisible and controller is visible
+      this.div.classList.add('vsc-hidden');
+      window.VSC.logger.debug('Hiding controller - video became invisible');
+    }
+  }`,
+      },
+      [
+        `
+}
+
+// Create singleton instance
+window.VSC.VideoController = VideoController;`,
+        `
+
+  /**
+   * UXP: dispatch controller lifecycle events for the toolbar badge.
+   * @param {string} eventType - VSC_CONTROLLER_CREATED or VSC_CONTROLLER_REMOVED
+   * @param {Object} detail - Event detail data
+   * @private
+   */
+  dispatchControllerEvent(eventType, detail) {
+    try {
+      const event = new CustomEvent(eventType, { detail, bubbles: true });
+      // Dispatch on documentElement so the chrome overlay (single-process Pale Moon)
+      // can catch it via gBrowser.addEventListener with wantsUntrusted=true.
+      document.documentElement.dispatchEvent(event);
+      window.VSC.logger.debug(
+        \`Dispatched \${eventType} event for controller \${detail.controllerId}\`
+      );
+    } catch (error) {
+      window.VSC.logger.error(\`Failed to dispatch \${eventType} event:\`, error);
+    }
+  }
+}
+
+// Create singleton instance
+window.VSC.VideoController = VideoController;`,
+      ],
+    ],
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -413,13 +1042,26 @@ function generate(rel, upstreamText) {
   const { anchor = DEFAULT_ANCHOR, edits } = PORTS[rel];
   const problems = [];
   let text = upstreamText.replace(/\r\n/g, '\n');
-  for (const [from, to] of edits) {
-    const count = text.split(from).length - 1;
-    if (count !== 1) {
-      problems.push(`edit expected exactly 1 match, found ${count}:\n      ${from.split('\n')[0]}`);
+  const countOf = (needle) => text.split(needle).length - 1;
+  for (const edit of edits) {
+    const { from, through, to } = Array.isArray(edit) ? { from: edit[0], to: edit[1] } : edit;
+    const markers = through === undefined ? [from] : [from, through];
+    const bad = markers.filter((marker) => countOf(marker) !== 1);
+    if (bad.length) {
+      for (const marker of bad) {
+        problems.push(
+          `edit expected exactly 1 match, found ${countOf(marker)}:\n      ${marker.split('\n')[0]}`
+        );
+      }
       continue;
     }
-    text = text.replace(from, () => to);
+    const start = text.indexOf(from);
+    const end = through === undefined ? start + from.length : text.indexOf(through) + through.length;
+    if (end < start + from.length) {
+      problems.push(`range edit: 'through' precedes 'from':\n      ${from.split('\n')[0]}`);
+      continue;
+    }
+    text = text.slice(0, start) + to + text.slice(end);
   }
   const at = text.indexOf(anchor);
   if (at === -1 || text.indexOf(anchor, at + 1) !== -1) {

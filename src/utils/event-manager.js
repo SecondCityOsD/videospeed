@@ -1,10 +1,13 @@
 /**
- * Event management system for Video Speed Controller — UXP port.
- *
- * Ported from upstream 0.10.2 verbatim with one site-handler-namespace
- * adaptation (the click-skip selector uses our `.vsc-controller` class
- * selector instead of upstream's `vsc-controller` custom-element tag).
+ * Event management system for Video Speed Controller
  */
+
+// UXP: the fork loads every module as its own classic <script> in page scope;
+// upstream gets one esbuild IIFE around the whole bundle. This wrapper keeps
+// top-level bindings out of the page's global lexical scope, where a site
+// script declaring the same name would throw a redeclaration SyntaxError.
+(function () {
+'use strict';
 
 window.VSC = window.VSC || {};
 
@@ -13,21 +16,17 @@ class EventManager {
     this.config = config;
     this.actionHandler = actionHandler;
     this.listeners = new Map();
-    this.coolDown = false;
 
     // Event deduplication to prevent duplicate key processing
     this.lastKeyEventSignature = null;
 
-    // Fight detection: track how many times a site resets our speed
-    this.fightCount = 0;
-    this.fightTimer = null;
-
-    // User gesture tracking: timestamp of the last user interaction we did NOT
-    // handle (click on page UI, unhandled key). A ratechange arriving within
-    // USER_GESTURE_WINDOW_MS of this is treated as intentional and accepted
-    // immediately rather than fought — handles native site speed controls
-    // (YouTube's speed menu, Netflix's playback rate widget, etc.).
-    this.lastUserInteractionAt = 0;
+    // Decision core: classifier (gesture evidence -> verdicts) + arbiter
+    // (pure transition table). See docs/speed-arbitration.md. This module
+    // is an adapter: it owns DOM listeners and consumes the write-token
+    // echo filter; all accept/enforce/ignore decisions live in the
+    // arbiter, and fight/gesture/echo state lives on the arbitration
+    // adapter.
+    this.arbitration = new window.VSC.SpeedArbitration(config, this);
   }
 
   /**
@@ -47,42 +46,41 @@ class EventManager {
   setupKeyboardShortcuts(document) {
     const docs = [document];
 
-    // Same-origin top document also gets the listener so shortcuts work when
-    // focus is inside our iframe but the user is also looking at the top page.
-    // Cross-origin top throws SecurityError on .document access — caught here.
     try {
+      // UXP: upstream calls window.VSC.inIframe(), which dom-utils never
+      // defines (the helper is DomUtils.inIframe), so the TypeError lands in
+      // this catch and same-origin frames silently lose top-document
+      // shortcuts. Call the real helper.
       if (window.VSC.DomUtils.inIframe()) {
-        const topDoc = window.top.document;
-        if (topDoc && topDoc !== document) {
-          docs.push(topDoc);
-        }
+        docs.push(window.top.document);
       }
     } catch (e) {
-      window.VSC.logger.debug('Cannot reach top document (cross-origin) — skipping');
+      // Cross-origin iframe - ignore
     }
 
     docs.forEach((doc) => {
-      try {
-        const keydownHandler = (event) => this.handleKeydown(event);
-        doc.addEventListener('keydown', keydownHandler, true);
+      const keydownHandler = (event) => this.handleKeydown(event);
+      const keyupHandler = (event) => this.handleKeyup(event);
+      doc.addEventListener('keydown', keydownHandler, true);
+      doc.addEventListener('keyup', keyupHandler, true);
 
-        if (!this.listeners.has(doc)) {
-          this.listeners.set(doc, []);
-        }
-        this.listeners.get(doc).push({
-          type: 'keydown',
-          handler: keydownHandler,
-          useCapture: true,
-        });
-      } catch (e) {
-        window.VSC.logger.debug(`Could not attach keydown listener: ${e.message}`);
+      // Store references for cleanup. Keyup only retires the short-lived
+      // YouTube Space-hold signature; it never handles VSC shortcuts.
+      if (!this.listeners.has(doc)) {
+        this.listeners.set(doc, []);
       }
+      this.listeners
+        .get(doc)
+        .push(
+          { type: 'keydown', handler: keydownHandler, useCapture: true },
+          { type: 'keyup', handler: keyupHandler, useCapture: true }
+        );
     });
   }
 
   /**
    * Handle keydown events
-   * @param {KeyboardEvent} event
+   * @param {KeyboardEvent} event - Keyboard event
    * @private
    */
   handleKeydown(event) {
@@ -90,10 +88,9 @@ class EventManager {
       `Processing keydown event: code=${event.code}, key=${event.key}, keyCode=${event.keyCode}`
     );
 
-    // IME composition and dead-key guard.
-    //   'Process' / keyCode 229 = IME composition active (CJK input)
-    //   'Dead'                  = first keypress of a dead key sequence
-    //                             (e.g. ^ on a French keyboard to compose ê)
+    // IME composition and dead key guard
+    // 'Process' / keyCode 229 = IME composition active (CJK input)
+    // 'Dead' = first keypress of a dead key sequence (e.g. ^ on French keyboard)
     if (
       event.isComposing ||
       event.keyCode === 229 ||
@@ -103,26 +100,30 @@ class EventManager {
       return;
     }
 
-    // Event deduplication — include code+key so empty-code keyboards still dedupe.
+    // Event deduplication — include code+key to handle empty-code cases
     const eventSignature = `${event.code}_${event.key}_${event.timeStamp}_${event.type}`;
     if (this.lastKeyEventSignature === eventSignature) {
       return;
     }
     this.lastKeyEventSignature = eventSignature;
 
-    // Ignore keydown when typing in an input box
+    // Presence evidence regardless of what the key does (quiet axis).
+    this.arbitration.classifier.observeInput(event);
+
+    // Ignore keydown event if typing in an input box
     if (this.isTypingContext(event.target)) {
       return false;
     }
 
-    // Ignore keydown if no controllers are currently tracked.
-    const mediaElements =
-      window.VSC.stateManager ? window.VSC.stateManager.getControlledElements() : [];
+    // Ignore keydown event if no media elements are present
+    const mediaElements = window.VSC.stateManager
+      ? window.VSC.stateManager.getControlledElements()
+      : [];
     if (!mediaElements.length) {
       return false;
     }
 
-    // Find matching key binding via the three-tier algorithm.
+    // Find matching key binding using the three-tier algorithm
     const keyBinding = this.findMatchingBinding(event);
 
     if (keyBinding) {
@@ -133,16 +134,29 @@ class EventManager {
         event.stopPropagation();
       }
     } else {
-      // Unhandled key — could be a site shortcut (e.g. YouTube's < > speed keys).
-      // Mark as user interaction so an immediately-following ratechange is
-      // accepted instead of fought back.
-      this.lastUserInteractionAt = event.timeStamp;
+      // Unhandled key — possibly a native site shortcut. Whether it counts
+      // as gesture evidence is the classifier's ruling (native speed
+      // shortcuts and site signatures only, per PR #1563).
+      this.arbitration.classifier.observeUnhandledKey(event);
       window.VSC.logger.verbose(
         `No key binding found for code=${event.code}, keyCode=${event.keyCode}`
       );
     }
 
     return false;
+  }
+
+  /**
+   * Retire a native Space hold after its physical key release. The classifier
+   * owns host detection and media attribution; arbitration owns restoration.
+   * @param {KeyboardEvent} event
+   * @private
+   */
+  handleKeyup(event) {
+    const media = this.arbitration.classifier.observeKeyEnd(event);
+    if (media) {
+      this.arbitration.noteTemporaryOverrideEnd(media);
+    }
   }
 
   /**
@@ -168,7 +182,7 @@ class EventManager {
     // Runtime fallback: if event.code is empty or unidentified, match on keyCode
     if (!code || code === 'Unidentified') {
       return bindings.find((b) => {
-        const bKey = b.keyCode != null ? b.keyCode : b.key;
+        const bKey = (b.keyCode != null) ? b.keyCode : b.key;
         if (bKey !== keyCode) {
           return false;
         }
@@ -203,7 +217,7 @@ class EventManager {
         if (b.code !== null && b.code !== undefined) {
           return false;
         }
-        return (b.keyCode != null ? b.keyCode : b.key) === keyCode;
+        return ((b.keyCode != null) ? b.keyCode : b.key) === keyCode;
       });
       if (legacyMatch) {
         return legacyMatch;
@@ -215,58 +229,165 @@ class EventManager {
 
   /**
    * Check if user is typing in an input context
-   * @param {Element} target
-   * @returns {boolean}
+   * @param {Element} target - Event target
+   * @returns {boolean} True if typing context
    * @private
    */
   isTypingContext(target) {
     return (
-      target.nodeName === 'INPUT' ||
-      target.nodeName === 'TEXTAREA' ||
-      target.isContentEditable
+      target.nodeName === 'INPUT' || target.nodeName === 'TEXTAREA' || target.isContentEditable
     );
   }
 
   /**
-   * Track user interactions that originate outside the VSC controller.
-   * Clicks on YouTube's speed menu (or any site's native speed UI) land here.
-   * Unhandled keyboard events (e.g. YouTube's < > shortcuts) land in handleKeydown.
-   * Both update lastUserInteractionAt so handleRateChange can distinguish
-   * intentional speed changes from automatic site-initiated resets.
-   *
-   * UXP note: we use the `.vsc-controller` class selector here (plain DOM),
-   * not upstream's `vsc-controller` tag selector (custom element).
+   * Feed user interactions that originate outside the VSC controller to the
+   * classifier's evidence ledger. Clicks on native speed UI land here;
+   * unhandled keys land in handleKeydown; pointer lifecycle events cover
+   * click-and-hold interactions (evidence only under TARGET_RULES, per
+   * PR #1555).
+   * The classifier — not this module — decides what counts as intent.
+   * @param {Document} document
    * @private
    */
   setupUserGestureListener(document) {
+    // UXP: the controller is plain DOM, so match the `.vsc-controller`
+    // wrapper class where upstream tests for its `<vsc-controller>` tag.
+    const isOwnController = (target) =>
+      !!(target && target.closest && target.closest('.vsc-controller'));
     const clickHandler = (event) => {
-      // Skip clicks on our own controller.
-      var target = event.target;
-      if (target && target.closest && target.closest('.vsc-controller')) {
+      // Skip clicks on our own controller (shadow host retargeted at boundary)
+      if (isOwnController(event.target)) {
         return;
       }
-      this.lastUserInteractionAt = event.timeStamp;
+      this.arbitration.classifier.observeClick(event, this.resolveGestureMedia(event));
+    };
+    const pointerDownHandler = (event) => {
+      if (isOwnController(event.target)) {
+        return;
+      }
+      this.arbitration.classifier.observePointerDown(event, this.resolveGestureMedia(event));
+    };
+    // Do not filter terminal events by target: a pointer that began outside
+    // VSC can end on a captured/retargeted VSC node, and its hold must still
+    // be retired by pointer ID. The active local override remains until its
+    // following normal ratechange, which makes browser listener ordering safe.
+    // `lostpointercapture` is deliberately NOT a terminal signal: capture
+    // events are synthesized bookkeeping whose `buttons` value varies across
+    // browser builds, and YouTube can shed capture mid-hold. Real releases
+    // always reach these document-capture pointerup/pointercancel listeners.
+    const pointerEndHandler = (event) => {
+      for (const video of this.arbitration.classifier.observePointerEnd(event)) {
+        this.arbitration.noteTemporaryOverrideEnd(video);
+      }
+    };
+    // Browser focus/page lifecycle can swallow a physical terminal event.
+    // Do not let old hold evidence become indefinite across that boundary.
+    const clearTemporaryHolds = () => {
+      for (const video of this.arbitration.classifier.clearTemporaryHolds()) {
+        this.arbitration.noteTemporaryOverrideEnd(video);
+      }
+    };
+    const visibilityHandler = (event) => {
+      if (document.hidden) {
+        clearTemporaryHolds(event);
+      }
+    };
+    // Presence-only evidence for the quiet/activity axis: a single
+    // timestamp assignment per event. Deliberately coarse — no payloads are
+    // read (see classifier privacy note).
+    const inputHandler = (event) => {
+      this.arbitration.classifier.observeInput(event);
     };
     document.addEventListener('click', clickHandler, true);
+    document.addEventListener('pointerdown', pointerDownHandler, true);
+    document.addEventListener('pointerup', pointerEndHandler, true);
+    document.addEventListener('pointercancel', pointerEndHandler, true);
+    document.addEventListener('visibilitychange', visibilityHandler, true);
+    document.addEventListener('pointermove', inputHandler, { capture: true, passive: true });
+    // Do not observe `wheel` on document. In Chromium, registering the modern
+    // event there suppresses the legacy `mousewheel` fallback used by page
+    // controls such as Bilibili's web-fullscreen volume handler (#1598).
+    document.addEventListener('touchstart', inputHandler, { capture: true, passive: true });
 
     if (!this.listeners.has(document)) {
       this.listeners.set(document, []);
     }
-    this.listeners.get(document).push({
-      type: 'click',
-      handler: clickHandler,
-      useCapture: true,
-    });
+    this.listeners
+      .get(document)
+      .push(
+        { type: 'click', handler: clickHandler, useCapture: true },
+        { type: 'pointerdown', handler: pointerDownHandler, useCapture: true },
+        { type: 'pointerup', handler: pointerEndHandler, useCapture: true },
+        { type: 'pointercancel', handler: pointerEndHandler, useCapture: true },
+        { type: 'visibilitychange', handler: visibilityHandler, useCapture: true },
+        { type: 'pointermove', handler: inputHandler, useCapture: true },
+        { type: 'touchstart', handler: inputHandler, useCapture: true }
+      );
+
+    const view = document.defaultView;
+    if (view) {
+      if (!this.listeners.has(view)) {
+        this.listeners.set(view, []);
+      }
+      // Bubble phase is load-bearing: `blur` does not bubble but DOES capture
+      // through window for every element-level focus change. A capture
+      // listener here fires when a press moves page focus, wiping hold
+      // evidence milliseconds after the pointerdown that armed it. Without
+      // capture, only a genuine window blur (app/tab switch) reaches this.
+      view.addEventListener('blur', clearTemporaryHolds);
+      view.addEventListener('pagehide', clearTemporaryHolds);
+      this.listeners
+        .get(view)
+        .push(
+          { type: 'blur', handler: clearTemporaryHolds, useCapture: false },
+          { type: 'pagehide', handler: clearTemporaryHolds, useCapture: false }
+        );
+    }
+  }
+
+  /**
+   * Associate a page gesture with a controlled media element only when the
+   * DOM path or current site handler identifies one unambiguous owner.
+   * Unresolved gestures deliberately retain the classifier's legacy
+   * document-level fallback scope.
+   * @param {Event} event
+   * @returns {HTMLMediaElement|null}
+   */
+  resolveGestureMedia(event) {
+    const mediaElements = window.VSC.stateManager
+      ? window.VSC.stateManager.getControlledElements()
+      : [];
+    if (mediaElements.length === 0) {
+      return null;
+    }
+
+    const path = typeof event.composedPath === 'function' ? event.composedPath() : [event.target];
+    const controlled = new Set(mediaElements);
+    const directMatches = new Set(path.filter((node) => controlled.has(node)));
+    if (directMatches.size === 1) {
+      return directMatches.values().next().value;
+    }
+    if (directMatches.size > 1 || mediaElements.length === 1) {
+      return null;
+    }
+
+    const siteHandlerManager = window.VSC.siteHandlerManager;
+    const resolved =
+      siteHandlerManager != null && siteHandlerManager.resolveGestureMedia != null
+        ? siteHandlerManager.resolveGestureMedia(event, mediaElements)
+        : undefined;
+    return controlled.has(resolved) ? resolved : null;
   }
 
   /**
    * Set up rate change event listener
-   * @param {Document} document
+   * @param {Document} document - Document to attach events to
    */
   setupRateChangeListener(document) {
     const rateChangeHandler = (event) => this.handleRateChange(event);
     document.addEventListener('ratechange', rateChangeHandler, true);
 
+    // Store reference for cleanup
     if (!this.listeners.has(document)) {
       this.listeners.set(document, []);
     }
@@ -278,51 +399,57 @@ class EventManager {
   }
 
   /**
-   * Handle rate change events.
-   * @param {Event} event
+   * Handle rate change events
+   * @param {Event} event - Rate change event
    * @private
    */
   handleRateChange(event) {
-    if (this.coolDown) {
-      window.VSC.logger.debug('Rate change event blocked by cooldown');
-
-      // Plain DOM in UXP — composedPath returns [target] but defensive fallback
-      // covers any Pale Moon build that ever ships without it.
-      const video = event.composedPath ? event.composedPath()[0] : event.target;
-
-      // Don't fight back during video initialization — the player's own setup
-      // fires ratechange at readyState=0; overwriting it can break the player.
-      if (video.readyState < 1) {
-        window.VSC.logger.debug(
-          'Skipping cooldown fight-back during video init (readyState < 1)'
-        );
-        return;
-      }
-
-      // RESTORE our authoritative value since external change already happened
-      if (video.vsc && this.config.settings.lastSpeed !== null) {
-        const authoritativeSpeed = this.config.settings.lastSpeed;
-        if (Math.abs(video.playbackRate - authoritativeSpeed) > 0.01) {
-          window.VSC.logger.info(
-            `Restoring speed during cooldown from external ${video.playbackRate} to authoritative ${authoritativeSpeed}`
-          );
-          window.VSC.siteHandlerManager.handleSpeedChange(video, authoritativeSpeed);
-        }
-      }
-
-      event.stopImmediatePropagation();
-      return;
-    }
-
+    // Get the actual video element (handle shadow DOM)
     const video = event.composedPath ? event.composedPath()[0] : event.target;
 
     // Skip if no VSC controller attached
     if (!video.vsc) {
-      window.VSC.logger.debug('Skipping ratechange — no VSC controller attached');
+      window.VSC.logger.debug('Skipping ratechange - no VSC controller attached');
       return;
     }
 
-    // Our own dispatched event — already accounted for
+    // Echo filter: our own write coming back through the register. A
+    // consumed token identifies exactly one expected echo — unlike the
+    // legacy time-based cooldown, nothing genuinely external is ever
+    // masked, so reactive sites that rewrite the rate in response to our
+    // writes produce budget-accounted fight exchanges instead of an
+    // invisible write war.
+    const echo = this.arbitration.consumeEcho(video, video.playbackRate);
+    if (echo) {
+      window.VSC.logger.debug('Ignoring own write echo (in-flight token consumed)');
+      if (echo.suppressPropagation) {
+        // A page listener already proved that observing this exact VSC write
+        // causes it to rewrite the register. Hide only the guarded retry echo
+        // to break that feedback loop; ordinary writes remain observable.
+        event.stopImmediatePropagation();
+      } else {
+        // Filter the echo only from VSC's decision pipeline. A target observer
+        // runs after previously registered page listeners and records only a
+        // direct rewrite caused by this same event.
+        this.arbitration.observePropagatedEcho(video, event, echo);
+      }
+      return;
+    }
+
+    const reactiveRewrite = this.arbitration.consumeEchoReaction(video, event);
+    if (reactiveRewrite === null) {
+      // A page synchronously dispatched another ratechange while handling the
+      // VSC echo. Let the outer event reach its target-tail observer and wait
+      // for the native counter-event before retrying, avoiding reentrant writes.
+      event.stopImmediatePropagation();
+      return;
+    }
+
+    // Belt: origin-tagged synthetic events. This extension no longer
+    // dispatches them (the token filter replaced that mechanism), but a
+    // stale page-world script from a previous version may still emit them
+    // during an extension update; the classifier's SELF verdict mirrors
+    // this guard.
     if (event.detail && event.detail.origin === 'videoSpeed') {
       window.VSC.logger.debug('Ignoring extension-originated rate change');
       return;
@@ -336,7 +463,7 @@ class EventManager {
       return;
     }
 
-    // Ignore spurious external ratechanges at-or-below our supported MIN
+    // Ignore spurious external ratechanges below our supported MIN
     const rawExternalRate = typeof video.playbackRate === 'number' ? video.playbackRate : NaN;
     const min = window.VSC.Constants.SPEED_LIMITS.MIN;
     if (!isNaN(rawExternalRate) && rawExternalRate <= min) {
@@ -346,84 +473,22 @@ class EventManager {
       return;
     }
 
-    // Fight detection. User-initiated changes (detected via gesture window)
-    // are accepted immediately so native site controls coexist with us.
-    const authoritativeSpeed = this.config.settings.lastSpeed;
-
-    if (authoritativeSpeed && Math.abs(video.playbackRate - authoritativeSpeed) > 0.01) {
-      const timeSinceGesture = event.timeStamp - this.lastUserInteractionAt;
-      const isUserGesture = timeSinceGesture < EventManager.USER_GESTURE_WINDOW_MS;
-
-      if (isUserGesture) {
-        // User interacted with the site's native controls — accept immediately.
-        window.VSC.logger.info(
-          `Accepting site speed change as user-intentional (gesture ${timeSinceGesture}ms ago): ${video.playbackRate}`
-        );
-        this.fightCount = 0;
-        if (this.fightTimer) {
-          clearTimeout(this.fightTimer);
-          this.fightTimer = null;
-        }
-        this.lastUserInteractionAt = 0;
-        if (this.actionHandler) {
-          this.actionHandler.adjustSpeed(video, video.playbackRate);
-        }
-        return;
-      }
-
-      this.fightCount++;
-
-      // Reset fight counter after a quiet period
-      if (this.fightTimer) {
-        clearTimeout(this.fightTimer);
-      }
-      this.fightTimer = setTimeout(() => {
-        this.fightCount = 0;
-        this.fightTimer = null;
-      }, EventManager.FIGHT_WINDOW_MS);
-
-      if (this.fightCount >= EventManager.MAX_FIGHT_COUNT) {
-        // Surrender — accept the site's speed and fall through to update lastSpeed
-        window.VSC.logger.info(
-          `Fight detection: surrendering after ${this.fightCount} resets. Accepting site speed ${video.playbackRate}`
-        );
-        this.fightCount = 0;
-      } else {
-        // Fight back — restore our speed with exponential backoff
-        const cooldown = Math.min(
-          EventManager.BASE_COOLDOWN_MS * Math.pow(2, this.fightCount - 1),
-          EventManager.MAX_COOLDOWN_MS
-        );
-        window.VSC.logger.info(
-          `Fight detection: attempt ${this.fightCount}/${EventManager.MAX_FIGHT_COUNT}, re-applying ${authoritativeSpeed} (cooldown ${cooldown}ms)`
-        );
-        window.VSC.siteHandlerManager.handleSpeedChange(video, authoritativeSpeed);
-        this.refreshCoolDown(cooldown);
-        event.stopImmediatePropagation();
-        return;
-      }
-    }
-
-    // Accept the external change.
-    if (this.actionHandler) {
-      this.actionHandler.adjustSpeed(video, video.playbackRate, { source: 'external' });
-    }
-  }
-
-  /**
-   * Start cooldown period to prevent event spam.
-   * @param {number} [duration] - Cooldown duration in ms.
-   */
-  refreshCoolDown(duration) {
-    if (typeof duration !== 'number') {
-      duration = EventManager.BASE_COOLDOWN_MS;
-    }
-    if (this.coolDown) {
-      clearTimeout(this.coolDown);
-    }
-    this.coolDown = setTimeout(() => {
-      this.coolDown = false;
-    }, duration);
+    // Everything past the guards above is a genuine external change. A proven
+    // echo counter-write is autonomous regardless of stale gesture evidence;
+    // all other changes use the classifier. The arbiter still owns every
+    // accept/enforce/ignore transition and effect.
+    const verdict = reactiveRewrite
+      ? window.VSC.IntentClassifier.VERDICTS.AUTONOMOUS
+      : this.arbitration.classifier.classify({
+          media: video,
+          rate: video.playbackRate,
+          timeStamp: event.timeStamp,
+          readyState: video.readyState,
+          detail: event.detail,
+        });
+    this.arbitration.onExternalRate(video, event, verdict, {
+      suppressRetryEcho: reactiveRewrite,
+    });
   }
 
   /**
@@ -442,16 +507,7 @@ class EventManager {
 
     this.listeners.clear();
 
-    if (this.coolDown) {
-      clearTimeout(this.coolDown);
-      this.coolDown = false;
-    }
-
-    if (this.fightTimer) {
-      clearTimeout(this.fightTimer);
-      this.fightTimer = null;
-    }
-    this.fightCount = 0;
+    this.arbitration.cleanup();
   }
 }
 
@@ -460,26 +516,14 @@ class EventManager {
  * @returns {boolean} True if all four modifiers match exactly.
  */
 EventManager.modifiersMatch = function (mods, ctrl, alt, meta, shift) {
-  return (
-    mods.ctrl === ctrl && mods.alt === alt && mods.meta === meta && mods.shift === shift
-  );
+  return mods.ctrl === ctrl && mods.alt === alt && mods.meta === meta && mods.shift === shift;
 };
 
-// Time window (ms) after a user interaction in which an external ratechange is
-// treated as user-intentional (site native controls) rather than fought back.
-EventManager.USER_GESTURE_WINDOW_MS = 300;
+// Timing constants live where the state lives: gesture-window timing on
+// IntentClassifier; fight-window timing, the fight budget, and the echo
+// filter (write tokens) on SpeedArbitration/SpeedArbiter.
 
-// Base cooldown duration (ms) for ratechange handling; doubles each fight-back retry
-EventManager.BASE_COOLDOWN_MS = 200;
-
-// Maximum cooldown duration (ms) during fight-back backoff
-EventManager.MAX_COOLDOWN_MS = 2000;
-
-// Fight detection: surrender after this many rapid site-initiated resets
-EventManager.MAX_FIGHT_COUNT = 5;
-
-// Fight detection: reset fight count after this quiet period (ms)
-EventManager.FIGHT_WINDOW_MS = EventManager.MAX_COOLDOWN_MS + 1000;
-
-// Create singleton instance reference
+// Create singleton instance
 window.VSC.EventManager = EventManager;
+
+})();
