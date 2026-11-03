@@ -147,6 +147,18 @@ not regress them:
   define top-level constants must explicitly assign
   `window.VSC.X = X;` at the bottom (see
   `controller-css-defaults.js`, `key-maps.js`).
+- **Every `src/**` module is wrapped in a strict-mode IIFE** (0.11.1
+  upgrade onward). Each module is injected as its own classic `<script>`,
+  so a bare top-level `class`/`const`/`function` lands in the page's
+  global scope: a site declaring the same name throws a redeclaration
+  SyntaxError (breaking VSC or the site), and top-level `function`
+  declarations overwrite `window.*` (upstream's `arbiter.js` would leak
+  `window.step`/`window.effect`). Upstream gets this isolation from its
+  single esbuild IIFE bundle. Cross-module access goes only through
+  `window.VSC.*`. The wrapper sits after the file's header comment and
+  the body is NOT re-indented, so `diff` against upstream shows only
+  real adaptations. Modules not yet ported to 0.11.1 are still
+  unwrapped — wrap each one as it is ported.
 - **Stylesheet `!important` outranks normal-priority inline styles.**
   `drag-handler.js` mutates `innerCtrl.style.left/top` inline, so the
   `top` and `left` rules in `shadow-dom.js` *must not* carry `!important`
