@@ -176,11 +176,6 @@
       <checkbox id="audioBoolean" label="Audio support"/>
       <checkbox id="rememberSpeed" label="Remember playback speed"/>
       <checkbox id="startHidden" label="Hide controller by default"/>
-
-      <vbox>
-        <checkbox id="forceLastSavedSpeed" label="Force last saved speed"/>
-        <description class="indent">Prevent video players that override VSC speed</description>
-      </vbox>
     </groupbox>
 
     <!-- Action Buttons -->

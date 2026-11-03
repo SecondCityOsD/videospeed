@@ -47,8 +47,6 @@ zip -r9 "${XPI_NAME}" \
   src/ui/drag-handler.js \
   src/content/inject.js \
   src/styles/controller-css-defaults.js \
-  src/styles/inject.css \
-  src/assets/icons/ \
   LICENSE \
   -x "*.git*" "*.DS_Store"
 

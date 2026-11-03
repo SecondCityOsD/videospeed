@@ -15,7 +15,6 @@ var tcDefaults = {
   rememberSpeed: false,
   audioBoolean: true,
   startHidden: false,
-  forceLastSavedSpeed: false,
   enabled: true,
   controllerOpacity: 0.3,
   controllerButtonSize: 14,
@@ -31,7 +30,7 @@ var tcDefaults = {
     { action: "mark", key: 77, value: 0, force: false, predefined: true },
     { action: "jump", key: 74, value: 0, force: false, predefined: true }
   ],
-  blacklist: "www.instagram.com\nx.com\nimgur.com\nteams.microsoft.com"
+  blacklist: "www.instagram.com\nx.com\nimgur.com\nteams.microsoft.com\nmeet.google.com"
 };
 
 var keyBindings = [];
@@ -227,7 +226,6 @@ function save_options() {
 
   VSCPrefs.setMultiple({
     rememberSpeed: document.getElementById("rememberSpeed").checked,
-    forceLastSavedSpeed: document.getElementById("forceLastSavedSpeed").checked,
     audioBoolean: document.getElementById("audioBoolean").checked,
     enabled: document.getElementById("enabled").checked,
     startHidden: document.getElementById("startHidden").checked,
@@ -247,7 +245,6 @@ function restore_options() {
   var storage = VSCPrefs.getAll();
 
   document.getElementById("rememberSpeed").checked = storage.rememberSpeed;
-  document.getElementById("forceLastSavedSpeed").checked = storage.forceLastSavedSpeed;
   document.getElementById("audioBoolean").checked = storage.audioBoolean;
   document.getElementById("enabled").checked = storage.enabled;
   document.getElementById("startHidden").checked = storage.startHidden;
@@ -296,7 +293,6 @@ function restore_options() {
 function restore_defaults() {
   VSCPrefs.setMultiple({
     rememberSpeed: tcDefaults.rememberSpeed,
-    forceLastSavedSpeed: tcDefaults.forceLastSavedSpeed,
     audioBoolean: tcDefaults.audioBoolean,
     enabled: tcDefaults.enabled,
     startHidden: tcDefaults.startHidden,

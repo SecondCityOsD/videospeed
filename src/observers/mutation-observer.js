@@ -189,7 +189,7 @@ class VideoMutationObserver {
    */
   checkForVideoAndShadowRoot(node, parent, added) {
     // Only proceed with removal if node is missing from DOM
-    if (!added && document.body?.contains(node)) {
+    if (!added && document.body && document.body.contains(node)) {
       return;
     }
 

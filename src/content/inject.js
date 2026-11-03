@@ -212,10 +212,11 @@ class VideoSpeedExtension {
 
   setupCSSLiveUpdates() {
     document.documentElement.addEventListener('VSC_STORAGE_CHANGED', (e) => {
-      if (e.detail?.customCSS?.newValue === undefined || !this._controllerSheet) {
+      const cssChange = e.detail && e.detail.customCSS;
+      if (!cssChange || cssChange.newValue === undefined || !this._controllerSheet) {
         return;
       }
-      const customCSS = e.detail.customCSS.newValue || '';
+      const customCSS = cssChange.newValue || '';
       if (customCSS) {
         if (!this._customSheet) {
           this._customSheet = this._appendStyle(customCSS, 'vsc-controller-custom');
@@ -364,18 +365,20 @@ class VideoSpeedExtension {
   // SPA-navigation safety net.
   //
   // YouTube, Twitter, Vimeo, etc. swap videos via history.pushState — no
-  // DOMContentLoaded refires. Our mutation observer SHOULD catch the new
-  // <video> element when the player container re-renders, but in practice
-  // it doesn't always (racing rebuilds, lazy media loaders, userscript
-  // reskins like VORAPIS V3 that rewrite the DOM aggressively).
+  // DOMContentLoaded refires, and the mutation observer doesn't always catch
+  // the new <video> (racing rebuilds, lazy media loaders, aggressive
+  // userscript reskins like VORAPIS V3).
   //
-  // Poll location.href once per second. When it changes, wait 500 ms for
-  // the SPA to settle, then re-run a media scan and attach controllers to
-  // any video that doesn't already have one. Cheap and survives every SPA
-  // pattern that's stumped the mutation observer in testing.
+  // We share the page's JS world, so instead of polling location.href on a
+  // permanent 1 s interval (which ran on EVERY page forever, even pages with
+  // no media), hook the History API plus popstate/hashchange. On any URL
+  // change we wait 500 ms for the SPA to settle, then rescan and attach
+  // controllers to any video that doesn't already have one.
   let __vscLastUrl = location.href;
-  const __vscSpaPoll = setInterval(() => {
-    if (location.href === __vscLastUrl) return;
+  const __vscRescan = () => {
+    if (location.href === __vscLastUrl) {
+      return;
+    }
     __vscLastUrl = location.href;
     if (window.VSC && window.VSC.logger) {
       window.VSC.logger.debug('SPA navigation detected — re-scanning for media');
@@ -395,9 +398,37 @@ class VideoSpeedExtension {
         }
       }
     }, 500);
-  }, 1000);
-  // Best-effort cleanup when the page unloads.
-  window.addEventListener('unload', () => clearInterval(__vscSpaPoll), { once: true });
+  };
+
+  // Wrap pushState/replaceState so programmatic navigations notify us. The
+  // __vscWrapped guard prevents double-wrapping if another script (or a second
+  // injection) also wraps them.
+  const __vscWrapHistory = (method) => {
+    try {
+      const orig = history[method];
+      if (typeof orig !== 'function' || orig.__vscWrapped) {
+        return;
+      }
+      const wrapped = function () {
+        const ret = orig.apply(this, arguments);
+        try {
+          __vscRescan();
+        } catch (e) {
+          /* ignored */
+        }
+        return ret;
+      };
+      wrapped.__vscWrapped = true;
+      history[method] = wrapped;
+    } catch (e) {
+      // history not writable on this page — popstate/hashchange still cover
+      // back/forward and hash navigations.
+    }
+  };
+  __vscWrapHistory('pushState');
+  __vscWrapHistory('replaceState');
+  window.addEventListener('popstate', __vscRescan);
+  window.addEventListener('hashchange', __vscRescan);
 
   document.documentElement.addEventListener('VSC_MESSAGE', (event) => {
     const message = event.detail;
@@ -418,9 +449,11 @@ class VideoSpeedExtension {
               }
             });
 
-            window.VSC.logger?.debug(
-              `Set speed to ${targetSpeed} on ${videos.length} media elements`
-            );
+            if (window.VSC.logger) {
+              window.VSC.logger.debug(
+                `Set speed to ${targetSpeed} on ${videos.length} media elements`
+              );
+            }
           }
           break;
 
@@ -437,9 +470,11 @@ class VideoSpeedExtension {
               }
             });
 
-            window.VSC.logger?.debug(
-              `Adjusted speed by ${delta} on ${videos.length} media elements`
-            );
+            if (window.VSC.logger) {
+              window.VSC.logger.debug(
+                `Adjusted speed by ${delta} on ${videos.length} media elements`
+              );
+            }
           }
           break;
 
@@ -452,7 +487,9 @@ class VideoSpeedExtension {
             }
           });
 
-          window.VSC.logger?.debug(`Reset speed on ${videos.length} media elements`);
+          if (window.VSC.logger) {
+            window.VSC.logger.debug(`Reset speed on ${videos.length} media elements`);
+          }
           break;
 
         case window.VSC.Constants.MESSAGE_TYPES.TOGGLE_DISPLAY:

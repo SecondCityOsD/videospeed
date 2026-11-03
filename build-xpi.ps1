@@ -70,18 +70,10 @@ $scriptFiles = @(
     'src\ui\controls.js',
     'src\ui\drag-handler.js',
     'src\content\inject.js',
-    'src\styles\controller-css-defaults.js',
-    'src\styles\inject.css'
+    'src\styles\controller-css-defaults.js'
 )
 
 $allFiles = $files + $scriptFiles
-
-$iconDir = 'src\assets\icons'
-if (Test-Path (Join-Path $sourceDir $iconDir)) {
-    Get-ChildItem -Path (Join-Path $sourceDir $iconDir) -File | ForEach-Object {
-        $allFiles += "$iconDir\$($_.Name)"
-    }
-}
 
 $skinDir = 'chrome\skin\classic'
 if (Test-Path (Join-Path $sourceDir $skinDir)) {

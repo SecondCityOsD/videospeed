@@ -62,6 +62,15 @@ class VideoSpeedConfig {
         return;
       }
 
+      // Global disable. The chrome layer normally skips injection entirely
+      // when the extension is disabled, but if a document somehow received
+      // our scripts, bail cleanly here — inject.js honors settings._abort.
+      if (storage.enabled === false) {
+        this.settings._abort = true;
+        window.VSC.logger.info('Extension disabled globally — aborting init');
+        return;
+      }
+
       this._loaded = true;
 
       this.settings.keyBindings = (
@@ -74,27 +83,14 @@ class VideoSpeedConfig {
         await this.save({ keyBindings: this.settings.keyBindings });
       }
 
-      const regStrip = /^[\r\t\f\v ]+|[\r\t\f\v ]+$/gm;
-      if (storage.blacklist !== null && storage.blacklist !== undefined && !storage.siteRules) {
-        storage.siteRules = storage.blacklist
-          .split('\n')
-          .map((l) => l.replace(regStrip, ''))
-          .filter(Boolean)
-          .map((pattern) => ({ pattern, enabled: false, speed: null }));
-        await this.save({ siteRules: storage.siteRules });
-      }
-
-      this.settings.siteRules =
-        storage.siteRules || window.VSC.Constants.DEFAULT_SETTINGS.siteRules;
-
-      if (window.VSC.matchSiteRule) {
-        const matched = window.VSC.matchSiteRule(this.settings.siteRules, window.location.href);
-        if (matched && matched.speed !== null && matched.speed !== undefined) {
-          this.settings.siteDefaultSpeed = matched.speed;
-          window.VSC.logger.info(
-            `Site rule matched: pattern="${matched.pattern}", speed=${matched.speed}`
-          );
-        }
+      // Blacklist and per-site rules are resolved in the privileged chrome
+      // layer (overlay.js): blacklisted/disabled pages are never injected, and
+      // the chrome side seeds an already-resolved `siteDefaultSpeed` for
+      // matched sites. The page world deliberately never receives the raw
+      // blacklist/siteRules (privacy), so there is nothing to match here.
+      if (typeof storage.siteDefaultSpeed === 'number') {
+        this.settings.siteDefaultSpeed = storage.siteDefaultSpeed;
+        window.VSC.logger.info(`Site default speed applied: ${storage.siteDefaultSpeed}`);
       }
 
       this.settings.rememberSpeed = Boolean(storage.rememberSpeed);
@@ -114,7 +110,7 @@ class VideoSpeedConfig {
       if (storage.controllerCSS !== null) {
         window.VSC.StorageManager.remove(['controllerCSS']);
       }
-      this.settings.customCSS = storage.customCSS ?? '';
+      this.settings.customCSS = (storage.customCSS != null) ? storage.customCSS : '';
       this.settings.logLevel = Number(
         storage.logLevel || window.VSC.Constants.DEFAULT_SETTINGS.logLevel
       );

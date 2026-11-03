@@ -8,31 +8,37 @@ window.VSC = window.VSC || {};
 class VSCStateManager {
   constructor() {
     this.controllers = new Map();
-    window.VSC.logger?.debug('VSCStateManager initialized');
+    if (window.VSC.logger) window.VSC.logger.debug('VSCStateManager initialized');
   }
 
   registerController(controller) {
     if (!controller || !controller.controllerId) {
-      window.VSC.logger?.warn('Invalid controller registration attempt');
+      if (window.VSC.logger) window.VSC.logger.warn('Invalid controller registration attempt');
       return;
     }
 
     const controllerInfo = {
       controller: controller,
       element: controller.video,
-      tagName: controller.video?.tagName,
-      videoSrc: controller.video?.src || controller.video?.currentSrc,
-      created: Date.now()
+      tagName: controller.video ? controller.video.tagName : undefined,
+      videoSrc:
+        (controller.video && controller.video.src) ||
+        (controller.video && controller.video.currentSrc),
+      created: Date.now(),
     };
 
     this.controllers.set(controller.controllerId, controllerInfo);
-    window.VSC.logger?.debug(`Controller registered: ${controller.controllerId}`);
+    if (window.VSC.logger) {
+      window.VSC.logger.debug(`Controller registered: ${controller.controllerId}`);
+    }
   }
 
   unregisterController(controllerId) {
     if (this.controllers.has(controllerId)) {
       this.controllers.delete(controllerId);
-      window.VSC.logger?.debug(`Controller unregistered: ${controllerId}`);
+      if (window.VSC.logger) {
+        window.VSC.logger.debug(`Controller unregistered: ${controllerId}`);
+      }
     }
   }
 
@@ -40,7 +46,7 @@ class VSCStateManager {
     const elements = [];
 
     for (const [id, info] of this.controllers) {
-      const video = info.controller?.video || info.element;
+      const video = (info.controller && info.controller.video) || info.element;
       if (video && video.isConnected) {
         elements.push(video);
       } else {
@@ -53,7 +59,7 @@ class VSCStateManager {
 
   getMediaByControllerId(controllerId) {
     const info = this.controllers.get(controllerId);
-    return info?.controller?.video || info?.element || null;
+    return (info && info.controller && info.controller.video) || (info && info.element) || null;
   }
 
   getFirstMedia() {
@@ -77,4 +83,4 @@ class VSCStateManager {
 window.VSC.StateManager = VSCStateManager;
 window.VSC.stateManager = new VSCStateManager();
 
-window.VSC.logger?.info('State Manager module loaded');
+if (window.VSC.logger) window.VSC.logger.info('State Manager module loaded');

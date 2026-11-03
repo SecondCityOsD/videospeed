@@ -132,26 +132,83 @@ var VideoSpeedOverlay = {
   },
 
   _loadSettings: function() {
-    var settingsData = {};
-    var keys = ['enabled', 'lastSpeed', 'rememberSpeed', 'exclusiveKeys', 'audioBoolean',
-               'startHidden', 'controllerOpacity', 'controllerButtonSize', 'customCSS',
-               'keyBindings', 'siteRules', 'blacklist', 'logLevel'];
+    // VSCPrefs.getAll() dispatches getBoolPref/getIntPref/getCharPref by key
+    // class and parses the JSON keys. The previous hand-rolled reader called
+    // getStringPref on EVERY key, which threw a type mismatch on the bool/int
+    // prefs (enabled, rememberSpeed, audioBoolean, startHidden,
+    // controllerButtonSize, logLevel) and silently swallowed them — so those
+    // six settings never reached content and the controller always used
+    // defaults. Always seed from getAll().
+    try {
+      this._settings = VSCPrefs.getAll();
+    } catch(e) {
+      Components.utils.reportError("VSC: _loadSettings failed: " + e);
+      this._settings = {};
+    }
+  },
 
-    keys.forEach(function(key) {
+  // --- Privileged site-matching helpers (ES5; ported from src/utils/site-pattern.js) ---
+
+  // Compile a blacklist / siteRule pattern string into a RegExp. Supports:
+  //   /regex/flags  → regex literal
+  //   domain.tld    → domain-boundary match  (^|.|//)domain\.tld(/|:|$)
+  //   anything else → escaped substring match
+  _compilePattern: function(raw) {
+    var regStrip = /^[\r\t\f\v ]+|[\r\t\f\v ]+$/gm;
+    var regEndsWithFlags = /\/(?!.*(.).*\1)[gimsuy]*$/;
+    var pattern = String(raw == null ? "" : raw).replace(regStrip, "");
+    if (!pattern.length) return null;
+
+    if (pattern.charAt(0) === "/") {
       try {
-        var prefType = VSCPrefs.branch.getPrefType(key);
-        if (prefType != 0) {
-          var value = VSCPrefs.branch.getStringPref(key);
-          if (key === 'keyBindings' || key === 'siteRules') {
-            try { settingsData[key] = JSON.parse(value); } catch(e) { settingsData[key] = value; }
-          } else {
-            settingsData[key] = value;
-          }
-        }
-      } catch(e) {}
-    });
+        var parts = pattern.split("/");
+        if (parts.length < 3) return null;
+        var hasFlags = regEndsWithFlags.test(pattern);
+        var flags = hasFlags ? parts.pop() : "";
+        var regex = parts.slice(1, hasFlags ? undefined : -1).join("/");
+        if (!regex) return null;
+        return new RegExp(regex, flags);
+      } catch(e) {
+        return null;
+      }
+    }
 
-    this._settings = settingsData;
+    var escaped = pattern.replace(/[|\\{}()[\]^$+*?.]/g, "\\$&");
+    var looksLikeDomain = pattern.indexOf(".") !== -1 && pattern.indexOf("/") === -1;
+    if (looksLikeDomain) {
+      return new RegExp("(^|\\.|//)" + escaped + "(\\/|:|$)");
+    }
+    return new RegExp(escaped);
+  },
+
+  // True if `href` matches any line of the user's newline-separated blacklist
+  // pref (the list the options page edits).
+  _isUrlBlacklisted: function(href) {
+    var bl = this._settings && this._settings.blacklist;
+    if (!bl) return false;
+    var lines = String(bl).split("\n");
+    for (var i = 0; i < lines.length; i++) {
+      var rx = this._compilePattern(lines[i]);
+      if (rx && rx.test(href)) return true;
+    }
+    return false;
+  },
+
+  // Per-site default speed from siteRules (first rule whose pattern matches
+  // and carries a numeric speed). Returns null when none applies. Drives the
+  // per-domain-speed feature; safe to call regardless of whether it's used.
+  _siteDefaultSpeed: function(href) {
+    var rules = this._settings && this._settings.siteRules;
+    if (!rules || !rules.length) return null;
+    for (var i = 0; i < rules.length; i++) {
+      var rule = rules[i];
+      if (!rule) continue;
+      var rx = this._compilePattern(rule.pattern || "");
+      if (rx && rx.test(href) && rule.speed !== null && rule.speed !== undefined) {
+        return rule.speed;
+      }
+    }
+    return null;
   },
 
   _ensureToolbarButton: function() {
@@ -189,6 +246,23 @@ var VideoSpeedOverlay = {
     // we already processed when their parent fired).
     var root = doc.documentElement;
     if (!root || root.hasAttribute("data-vsc-injected")) return;
+
+    // Refresh from prefs in case settings changed in the options page since
+    // the chrome window opened.
+    this._loadSettings();
+
+    // Privileged trust decisions live HERE, in the chrome layer — never in
+    // page scope where a hostile page could read or tamper with them:
+    //   - global disable (the popup / options "enabled" toggle)
+    //   - per-site blacklist (the `blacklist` pref the options page edits)
+    // A disabled or blacklisted document gets NO injection at all: the page
+    // world never sees window.VSC, the user's blacklist never leaks into it,
+    // and those pages stay strictly cheaper (zero extra script parse).
+    var href = doc.location.href;
+    if (this._settings.enabled === false || this._isUrlBlacklisted(href)) {
+      return;
+    }
+
     root.setAttribute("data-vsc-injected", "1");
 
     // SPA navigations leave the same <browser> element but the controllers
@@ -202,23 +276,33 @@ var VideoSpeedOverlay = {
       }
     }
 
-    // Refresh from prefs in case settings changed in the options page since
-    // the chrome window opened.
-    this._loadSettings();
-    this._injectInitialSettings(doc);
+    this._injectInitialSettings(doc, this._siteDefaultSpeed(href));
     this._injectScripts(doc);
   },
 
-  _injectInitialSettings: function(doc) {
+  _injectInitialSettings: function(doc, siteDefaultSpeed) {
     try {
+      // Build a SANITIZED copy of settings for page scope. The blacklist and
+      // siteRules are browsing-interest signals / trust data — they are
+      // resolved in the chrome layer (see _onContentReady) and must NOT be
+      // exposed to page JS (any tracker or userscript shares this world).
+      var safe = {};
+      var src = this._settings || {};
+      for (var k in src) {
+        if (k === "blacklist" || k === "siteRules") continue;
+        safe[k] = src[k];
+      }
+      if (siteDefaultSpeed !== null && siteDefaultSpeed !== undefined) {
+        safe.siteDefaultSpeed = siteDefaultSpeed;
+      }
+
       var script = doc.createElement("script");
       script.type = "application/javascript";
       // Synchronously seed content scope with the user's settings so that
       // storage-manager.js can read them on first access without waiting
       // for any cross-context event.
       script.textContent =
-        "window.VSC_initial_settings = " +
-        JSON.stringify(this._settings || {}) + ";";
+        "window.VSC_initial_settings = " + JSON.stringify(safe) + ";";
       (doc.head || doc.documentElement).appendChild(script);
     } catch(e) {
       Components.utils.reportError("VSC: Failed to inject initial settings: " + e);
@@ -254,12 +338,21 @@ var VideoSpeedOverlay = {
       var data = event.detail;
       if (!data) return;
       for (var key in data) {
-        var value = data[key];
-        if (typeof value === 'object' && value !== null) {
-          VSCPrefs.set(key, JSON.stringify(value));
-        } else {
-          VSCPrefs.set(key, value);
+        // SECURITY: this listener fires for UNTRUSTED page-dispatched events
+        // (registered with wantsUntrusted=true). Only allow writes to keys in
+        // our known pref schema, so a hostile page can't disable the
+        // extension, wipe the blacklist, or pollute the pref store with
+        // arbitrary keys.
+        if (!VSCPrefs.isValidKey(key)) {
+          Components.utils.reportError(
+            "VSC: ignoring settings write for unknown key: " + key);
+          continue;
         }
+        // Pass the RAW value. VSCPrefs.set() encodes per key class — JSON keys
+        // (keyBindings/siteRules/speeds) get exactly one JSON.stringify. The
+        // old code pre-stringified objects here, so those keys were
+        // double-encoded and failed to parse back.
+        VSCPrefs.set(key, data[key]);
       }
       // Keep our in-memory snapshot in sync for the next injection.
       this._loadSettings();

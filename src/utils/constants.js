@@ -42,11 +42,13 @@ const DEFAULT_SETTINGS = {
   ],
   siteRules: [
     { pattern: 'www.instagram.com', enabled: false, speed: null },
+    { pattern: 'x.com', enabled: false, speed: null },
     { pattern: 'imgur.com', enabled: false, speed: null },
     { pattern: 'teams.microsoft.com', enabled: false, speed: null },
     { pattern: 'meet.google.com', enabled: false, speed: null },
   ],
   blacklist: `www.instagram.com
+x.com
 imgur.com
 teams.microsoft.com
 meet.google.com`.replace(regStrip, ''),

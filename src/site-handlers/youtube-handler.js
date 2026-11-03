@@ -65,8 +65,9 @@ class YouTubeHandler extends window.VSC.BaseSiteHandler {
    * @private
    */
   setupYouTubeCSS() {
-    // YouTube has complex CSS that can hide our controller
-    // The inject.css already handles this, but we could add dynamic adjustments here
+    // YouTube has complex CSS that can hide our controller. The site-specific
+    // rules in styles/controller-css-defaults.js already handle this; dynamic
+    // adjustments could be added here if needed.
     window.VSC.logger.debug('YouTube CSS setup completed');
   }
 
@@ -79,7 +80,8 @@ class YouTubeHandler extends window.VSC.BaseSiteHandler {
     // Ignore thumbnail videos and ads
     return (
       video.classList.contains('video-thumbnail') ||
-      video.parentElement?.classList.contains('ytp-ad-player-overlay')
+      (video.parentElement &&
+        video.parentElement.classList.contains('ytp-ad-player-overlay'))
     );
   }
 

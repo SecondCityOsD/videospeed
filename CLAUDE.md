@@ -154,6 +154,18 @@ not regress them:
 - **`em` units inherit through the parent chain.** Hostile sites
   (VORAPIS V3 on YouTube) can change effective font-size on ancestors.
   Sizes inside the controller are pinned to absolute pixels.
+- **No `getStringPref` on the pref branch.** It throws a type mismatch on
+  bool/int prefs (and may be absent on older builds), silently dropping
+  them. Read settings via `VSCPrefs.getAll()` (or the typed
+  `getBoolPref`/`getIntPref`/`getCharPref`). `overlay._loadSettings` seeds
+  from `getAll()`.
+- **Trust decisions live in chrome, not page scope.** `overlay.js`
+  resolves the per-site blacklist and global `enabled`
+  (`_isUrlBlacklisted`, `_siteDefaultSpeed`); blacklisted/disabled
+  documents get NO script injection, and the raw `blacklist`/`siteRules`
+  are stripped from the `window.VSC_initial_settings` page seed (privacy).
+  The untrusted `VSC_SAVE_SETTINGS` content event is allowlisted via
+  `VSCPrefs.isValidKey` so page scripts can't write arbitrary prefs.
 
 ### Pref keys (`extensions.videospeed.*`)
 
@@ -162,9 +174,9 @@ not regress them:
 - `lastSpeed` (char/float), `controllerOpacity` (char/float)
 - `controllerButtonSize` (int), `logLevel` (int), `displayKeyCode` (int)
 - `keyBindings` (char/JSON), `speeds` (char/JSON; legacy, unused),
-  `blacklist` (char)
-- `forceLastSavedSpeed` (bool; legacy, unused — kept for backward
-  compatibility with old options-page UI)
+  `siteRules` (char/JSON), `blacklist` (char)
+- (`forceLastSavedSpeed` was removed in the June 2026 audit — upstream
+  deprecated it; fight-detection replaced it.)
 
 ### Backported upstream 0.10.2 features
 
@@ -211,15 +223,20 @@ Anchors `cwd` to the script's directory, packs via `zip -r9`.
 
 ## Known limitations
 
-- **Ancestor `transform: scale()` on the host page still scales the
-  controller visually** — CSS inside the controller can't undo an
-  ancestor transform. Workaround: re-parenting to `document.body`
-  outside any transformed container; not implemented because it loses
-  "follow the video" positioning.
+- **Ancestor `transform: scale()` / `zoom` on the host page** scales an
+  absolutely-positioned controller. Handled: `video-controller.js`
+  detects a transformed/zoomed ancestor (`_hasTransformedAncestor`) and
+  re-parents the controller to `document.body` with `position: fixed`
+  viewport tracking — rAF-throttled scroll/resize/ResizeObserver plus a
+  500 ms poll (`_setupViewportTracking`), and a `fullscreenchange` hook so
+  the body-parented controller follows the video into fullscreen.
 - **Cross-origin iframes** — the keybinding listener can't be attached
   to a cross-origin top document; key shortcuts only work when focus is
   inside same-origin frames (handled gracefully, no errors).
-- **Pale Moon < 30** may parse-fail on optional chaining (`?.`) and
-  nullish coalescing (`??`) used in the upstream-derived files. The
-  current `install.rdf` `minVersion=28.0` is aspirational; realistic
-  floor is Pale Moon 30+.
+- **Older-Goanna syntax floor.** The page-scope `src/**` modules were
+  down-levelled off optional chaining (`?.`), nullish coalescing (`??`)
+  and `static` class fields (June 2026 audit) so they parse on the
+  `install.rdf` `minVersion=28.0` floor — a single modern token aborts a
+  whole script file at load on older builds. Keep them that way;
+  `chrome/**` is already plain ES5. (Object spread / `Object.entries` are
+  still used — they parse on the Pale Moon versions in use.)

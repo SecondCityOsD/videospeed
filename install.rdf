@@ -13,6 +13,7 @@
     <em:homepageURL>https://github.com/SecondCityOsD/videospeed</em:homepageURL>
     <em:iconURL>chrome://videospeed/skin/icon48.png</em:iconURL>
     <em:icon64URL>chrome://videospeed/skin/icon128.png</em:icon64URL>
+    <em:optionsURL>chrome://videospeed/content/options/options.xul</em:optionsURL>
 
     <!-- Pale Moon -->
     <em:targetApplication>

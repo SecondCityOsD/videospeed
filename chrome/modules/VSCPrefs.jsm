@@ -16,10 +16,10 @@ var VSCPrefs = {
     return this._branch;
   },
 
-  BOOL_KEYS: ["enabled", "rememberSpeed", "forceLastSavedSpeed", "audioBoolean", "startHidden"],
+  BOOL_KEYS: ["enabled", "rememberSpeed", "audioBoolean", "startHidden"],
   INT_KEYS: ["controllerButtonSize", "logLevel", "displayKeyCode"],
-  CHAR_KEYS: ["lastSpeed", "controllerOpacity", "blacklist", "keyBindings", "speeds"],
-  JSON_KEYS: ["keyBindings", "speeds"],
+  CHAR_KEYS: ["lastSpeed", "controllerOpacity", "blacklist", "keyBindings", "speeds", "siteRules"],
+  JSON_KEYS: ["keyBindings", "speeds", "siteRules"],
   FLOAT_KEYS: ["lastSpeed", "controllerOpacity"],
 
   /**
@@ -53,10 +53,17 @@ var VSCPrefs = {
     if (!settings.lastSpeed) settings.lastSpeed = 1.0;
     if (!settings.controllerOpacity) settings.controllerOpacity = 0.3;
 
-    // Parse JSON fields
+    // Parse JSON fields. Heal legacy double-encoded values: a prior
+    // content-save bug pre-stringified objects before VSCPrefs.set re-encoded
+    // them, so keyBindings could be stored as JSON.stringify(JSON.stringify(x)).
+    // A single parse then yields a string — parse once more to recover it.
     this.JSON_KEYS.forEach(function(key) {
       try {
-        settings[key] = JSON.parse(settings[key]);
+        var parsed = JSON.parse(settings[key]);
+        if (typeof parsed === "string") {
+          parsed = JSON.parse(parsed);
+        }
+        settings[key] = parsed;
       } catch(e) {
         settings[key] = (key === "speeds") ? {} : [];
       }
@@ -92,6 +99,18 @@ var VSCPrefs = {
         this.set(key, obj[key]);
       }
     }
+  },
+
+  /**
+   * Whether a key belongs to our known pref schema. Used by the chrome
+   * overlay to reject writes for unknown keys arriving on the (untrusted)
+   * VSC_SAVE_SETTINGS content event — a hostile page must not be able to
+   * write arbitrary prefs.
+   */
+  isValidKey: function(key) {
+    return this.BOOL_KEYS.indexOf(key) !== -1 ||
+           this.INT_KEYS.indexOf(key) !== -1 ||
+           this.CHAR_KEYS.indexOf(key) !== -1;
   },
 
   /**

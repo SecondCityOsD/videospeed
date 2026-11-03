@@ -157,7 +157,7 @@ class VideoController {
       }
     } else {
       // Ensure controller is visible, especially on YouTube
-      wrapper.classList.add('vcs-show');
+      wrapper.classList.add('vsc-show');
     }
 
     // Create shadow DOM with relative positioning inside shadow root
@@ -301,22 +301,65 @@ class VideoController {
         // video may have been removed; let remove() clean up later
       }
     };
+
+    // rAF-coalesced wrapper for the high-frequency listeners (scroll, resize,
+    // ResizeObserver): at most one getBoundingClientRect + style write per
+    // frame instead of one per event, so fast scrolling can't thrash layout.
+    let rafPending = false;
+    const scheduleUpdate = () => {
+      if (rafPending) return;
+      rafPending = true;
+      const run = () => {
+        rafPending = false;
+        update();
+      };
+      if (window.requestAnimationFrame) {
+        window.requestAnimationFrame(run);
+      } else {
+        window.setTimeout(run, 16);
+      }
+    };
+
     update();
 
-    this._viewportUpdate = update;
+    // The listeners are added with scheduleUpdate; remove() removes the same
+    // reference, so this must stay scheduleUpdate (not update).
+    this._viewportUpdate = scheduleUpdate;
 
     // scroll: use capture so we catch any scrollable ancestor's scroll too
-    window.addEventListener('scroll', update, true);
-    window.addEventListener('resize', update);
+    window.addEventListener('scroll', scheduleUpdate, true);
+    window.addEventListener('resize', scheduleUpdate);
 
     if (typeof window.ResizeObserver === 'function') {
       try {
-        this._resizeObserver = new window.ResizeObserver(update);
+        this._resizeObserver = new window.ResizeObserver(scheduleUpdate);
         this._resizeObserver.observe(this.video);
       } catch (e) {
         // ResizeObserver not available on this Pale Moon build
       }
     }
+
+    // Fullscreen escape. When the site fullscreens its player container, a
+    // controller parented to <body> sits OUTSIDE the fullscreened subtree and
+    // becomes invisible — exactly when the user wants speed control. On
+    // fullscreenchange, move the wrapper into the fullscreen element, and back
+    // to <body> on exit. (Goanna exposes both prefixed and unprefixed APIs.)
+    const onFsChange = () => {
+      try {
+        const fsEl = document.fullscreenElement || document.mozFullScreenElement || null;
+        if (fsEl && wrapper.parentNode !== fsEl) {
+          fsEl.appendChild(wrapper);
+        } else if (!fsEl && wrapper.parentNode !== document.body) {
+          document.body.appendChild(wrapper);
+        }
+        update();
+      } catch (e) {
+        // ignored
+      }
+    };
+    this._fsChange = onFsChange;
+    document.addEventListener('fullscreenchange', onFsChange, true);
+    document.addEventListener('mozfullscreenchange', onFsChange, true);
 
     // Fallback poll — covers animated transforms and ancestor mutations the
     // observer/scroll listeners don't catch. 500 ms is unnoticeable and the
@@ -401,6 +444,11 @@ class VideoController {
       clearInterval(this._viewportPoll);
       this._viewportPoll = null;
     }
+    if (this._fsChange) {
+      document.removeEventListener('fullscreenchange', this._fsChange, true);
+      document.removeEventListener('mozfullscreenchange', this._fsChange, true);
+      this._fsChange = null;
+    }
 
     // Remove DOM element
     if (this.div && this.div.parentNode) {
@@ -420,7 +468,15 @@ class VideoController {
       this.targetObserver.disconnect();
     }
 
-    // Unregistration from stateManager is handled by inject.js → onVideoRemoved.
+    // Unregister from the state manager. remove() is reached both via
+    // inject.js → onVideoRemoved AND directly from the mutation observer
+    // (Apple TV path, and the "became invalid" recheck). Unregistering here
+    // too guarantees no stale registry entry survives for a reused <video> —
+    // a stale entry would otherwise make the popup/keyboard apply a speed
+    // change twice to the same element.
+    if (window.VSC.stateManager && this.controllerId) {
+      window.VSC.stateManager.unregisterController(this.controllerId);
+    }
 
     // Remove reference from video element
     delete this.video.vsc;

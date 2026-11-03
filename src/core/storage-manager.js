@@ -6,9 +6,6 @@
 window.VSC = window.VSC || {};
 
 class StorageManager {
-  static _injectedSettings = null;
-  static _listenerSetup = false;
-
   static onError(callback) {
     this.errorCallback = callback;
   }
@@ -84,5 +81,10 @@ class StorageManager {
     });
   }
 }
+
+// Static class fields (`static x = ...`) don't parse on older Goanna builds
+// (pre-Pale-Moon-32). Initialize the static state after the class instead.
+StorageManager._injectedSettings = null;
+StorageManager._listenerSetup = false;
 
 window.VSC.StorageManager = StorageManager;

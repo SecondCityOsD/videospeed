@@ -22,7 +22,7 @@ class ActionHandler {
     }
 
     mediaTags.forEach((v) => {
-      const controller = v.vsc?.div;
+      const controller = v.vsc && v.vsc.div;
 
       if (!controller) {
         return;
@@ -354,7 +354,7 @@ class ActionHandler {
       })
     );
 
-    const speedIndicator = video.vsc?.speedIndicator;
+    const speedIndicator = video.vsc && video.vsc.speedIndicator;
     if (!speedIndicator) {
       window.VSC.logger.warn(
         'Cannot update speed indicator: video controller UI not fully initialized'
@@ -367,7 +367,7 @@ class ActionHandler {
       this.config.save({ lastSpeed: numericSpeed });
     }
 
-    if (video.vsc?.div) {
+    if (video.vsc && video.vsc.div) {
       this.flashController(video.vsc.div);
     }
   }

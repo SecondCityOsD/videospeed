@@ -36,23 +36,35 @@ class NetflixHandler extends window.VSC.BaseSiteHandler {
    * @returns {boolean} True if handled
    */
   handleSeek(video, seekSeconds) {
+    // The fork's scripts run in the PAGE world, so we can call Netflix's
+    // internal player API directly. Upstream MV3 needs a postMessage bridge to
+    // an injected page script (scripts/netflix.js) only because its content
+    // script is isolated; here there is no isolation, so that bridge — which
+    // in this fork was never injected, silently breaking Netflix seeking — is
+    // unnecessary. Fall back to currentTime if the API isn't reachable.
     try {
-      // Use Netflix's postMessage API for seeking
-      window.postMessage(
-        {
-          action: 'videospeed-seek',
-          seekMs: seekSeconds * 1000,
-        },
-        'https://www.netflix.com'
-      );
-
-      window.VSC.logger.debug(`Netflix seek: ${seekSeconds} seconds`);
-      return true;
+      var netflix = window.netflix;
+      var api =
+        netflix &&
+        netflix.appContext &&
+        netflix.appContext.state.playerApp.getAPI().videoPlayer;
+      if (api) {
+        var sessionId = api.getAllPlayerSessionIds()[0];
+        var currentMs = api.getCurrentTimeBySessionId(sessionId);
+        api.getVideoPlayerBySessionId(sessionId).seek(currentMs + seekSeconds * 1000);
+        window.VSC.logger.debug(`Netflix seek via player API: ${seekSeconds}s`);
+        return true;
+      }
     } catch (error) {
-      window.VSC.logger.error(`Netflix seek failed: ${error.message}`);
-      // Fallback to default seeking
+      window.VSC.logger.warn(`Netflix player-API seek failed, falling back: ${error.message}`);
+    }
+
+    try {
       video.currentTime += seekSeconds;
       return true;
+    } catch (e) {
+      window.VSC.logger.error(`Netflix fallback seek failed: ${e.message}`);
+      return false;
     }
   }
 
@@ -63,11 +75,9 @@ class NetflixHandler extends window.VSC.BaseSiteHandler {
   initialize(document) {
     super.initialize(document);
 
-    // Netflix-specific script injection is handled by content script (injector.js)
-    // since Chrome APIs are not available in injected page context
-    window.VSC.logger.debug(
-      'Netflix handler initialized - script injection handled by content script'
-    );
+    // No script injection needed: handleSeek calls Netflix's player API
+    // directly from the shared page world.
+    window.VSC.logger.debug('Netflix handler initialized');
   }
 
   /**
@@ -79,7 +89,8 @@ class NetflixHandler extends window.VSC.BaseSiteHandler {
     // Ignore preview videos or thumbnails
     return (
       video.classList.contains('preview-video') ||
-      video.parentElement?.classList.contains('billboard-row')
+      (video.parentElement &&
+        video.parentElement.classList.contains('billboard-row'))
     );
   }
 
