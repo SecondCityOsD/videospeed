@@ -11,11 +11,22 @@ var VideoSpeedOverlay = {
   // Page-context scripts to inject in order on every content document.
   // Paths are relative to `resource://videospeed/`, which chrome.manifest
   // already aliases to `src/` — do NOT prefix entries with "src/".
+  // This list is the single source of truth for shipped page scripts:
+  // build-xpi.ps1 / build.sh refuse to build unless it matches the .js files
+  // under src/ exactly (no missing entries, no unlisted files).
   _contentScripts: [
     "utils/key-maps.js",
     "utils/constants.js",
     "utils/logger.js",
     "utils/dom-utils.js",
+    // Speed-arbitration decision core + intent classifier + adapter, and the
+    // controller-visibility policy (upstream 0.11 inject-entry.js order).
+    // Must precede event-manager.js and video-controller.js, which construct
+    // the adapter.
+    "core/arbiter.js",
+    "core/intent-classifier.js",
+    "core/speed-arbitration.js",
+    "core/controller-visibility.js",
     "utils/event-manager.js",
     "utils/debug-helper.js",
     "core/state-manager.js",
