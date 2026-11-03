@@ -15,7 +15,10 @@ var VideoSpeedOverlay = {
   // build-xpi.ps1 / build.sh refuse to build unless it matches the .js files
   // under src/ exactly (no missing entries, no unlisted files).
   _contentScripts: [
+    // constants.js reads both of these from window.VSC (upstream imports
+    // them, so the bundle evaluates them first too).
     "utils/key-maps.js",
+    "styles/controller-css-defaults.js",
     "utils/constants.js",
     "utils/logger.js",
     "utils/dom-utils.js",
@@ -47,7 +50,6 @@ var VideoSpeedOverlay = {
     "ui/shadow-dom.js",
     "ui/controls.js",
     "ui/drag-handler.js",
-    "styles/controller-css-defaults.js",
     "content/inject.js"
   ],
 

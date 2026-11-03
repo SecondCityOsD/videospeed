@@ -311,6 +311,97 @@ window.VSC.ControllerVisibility = ControllerVisibility;`,
       ],
     ],
   },
+
+  'utils/logger.js': {
+    edits: [['      if (video.vsc?.controllerId) {', '      if (video.vsc && video.vsc.controllerId) {']],
+  },
+
+  'utils/key-maps.js': {
+    // Upstream is a pure ES module with no window.VSC line; wrap after the
+    // file header instead.
+    anchor: `/**
+ * Hardcoded mapping for the 9 predefined bindings.`,
+    edits: [
+      [
+        ' * Pure ES module exports — no window/DOM dependencies.',
+        ` * UXP: a classic script — the bindings are published on window.VSC at the
+ * end of this file instead of being exported as ES module bindings.`,
+      ],
+      ['export const PREDEFINED_CODE_MAP', 'const PREDEFINED_CODE_MAP'],
+      ['export const KEYCODE_TO_CODE', 'const KEYCODE_TO_CODE'],
+      ['export function displayKeyFromCode', 'function displayKeyFromCode'],
+      ['export const PREDEFINED_ACTIONS', 'const PREDEFINED_ACTIONS'],
+      ['export const DEFAULT_BINDINGS', 'const DEFAULT_BINDINGS'],
+      [
+        `export const BLACKLISTED_CODES = new Set([`,
+        `const BLACKLISTED_CODES = new Set([`,
+      ],
+      [
+        `  'ScrollLock',
+]);`,
+        `  'ScrollLock',
+]);
+
+// UXP: stands in for upstream's ES module exports (constants.js reads these).
+window.VSC = window.VSC || {};
+window.VSC.PREDEFINED_CODE_MAP = PREDEFINED_CODE_MAP;
+window.VSC.KEYCODE_TO_CODE = KEYCODE_TO_CODE;
+window.VSC.displayKeyFromCode = displayKeyFromCode;
+window.VSC.PREDEFINED_ACTIONS = PREDEFINED_ACTIONS;
+window.VSC.DEFAULT_BINDINGS = DEFAULT_BINDINGS;
+window.VSC.BLACKLISTED_CODES = BLACKLISTED_CODES;`,
+      ],
+    ],
+  },
+
+  'utils/constants.js': {
+    edits: [
+      [
+        `// Keyboard identity maps — shared with background.js (service worker context).
+// esbuild inlines these into each bundle at build time.
+import {
+  PREDEFINED_CODE_MAP,
+  KEYCODE_TO_CODE,
+  displayKeyFromCode,
+  PREDEFINED_ACTIONS,
+  BLACKLISTED_CODES,
+  DEFAULT_BINDINGS,
+} from './key-maps.js';
+import { DEFAULT_CONTROLLER_CSS } from '../styles/controller-css-defaults.js';
+
+`,
+        '',
+      ],
+      [
+        `window.VSC.Constants = {};
+`,
+        `window.VSC.Constants = {};
+
+// UXP: upstream imports these from key-maps.js and controller-css-defaults.js;
+// the fork's classic scripts publish them on window.VSC, and overlay.js loads
+// both files before this one (the bundle's import evaluation order).
+const {
+  PREDEFINED_CODE_MAP,
+  KEYCODE_TO_CODE,
+  displayKeyFromCode,
+  PREDEFINED_ACTIONS,
+  BLACKLISTED_CODES,
+  DEFAULT_BINDINGS,
+  DEFAULT_CONTROLLER_CSS,
+} = window.VSC;
+
+// UXP: guarded requestIdleCallback stand-in for engines without it;
+// mutation-observer.js calls it unguarded.
+if (typeof window.requestIdleCallback === 'undefined') {
+  window.requestIdleCallback = function(cb, opts) {
+    return setTimeout(cb, (opts && opts.timeout) ? Math.min(opts.timeout, 50) : 1);
+  };
+  window.cancelIdleCallback = function(id) { clearTimeout(id); };
+}
+`,
+      ],
+    ],
+  },
 };
 
 // ---------------------------------------------------------------------------

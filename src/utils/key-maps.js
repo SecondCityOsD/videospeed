@@ -3,8 +3,16 @@
  * - background.js (service worker context — migration)
  * - constants.js (page context — runtime matching + options page)
  *
- * Pure ES module exports — no window/DOM dependencies.
+ * UXP: a classic script — the bindings are published on window.VSC at the
+ * end of this file instead of being exported as ES module bindings.
  */
+
+// UXP: the fork loads every module as its own classic <script> in page scope;
+// upstream gets one esbuild IIFE around the whole bundle. This wrapper keeps
+// top-level bindings out of the page's global lexical scope, where a site
+// script declaring the same name would throw a redeclaration SyntaxError.
+(function () {
+'use strict';
 
 /**
  * Hardcoded mapping for the 9 predefined bindings. Zero ambiguity —
@@ -34,7 +42,7 @@ const PREDEFINED_CODE_MAP = Object.freeze({
 const KEYCODE_TO_CODE = Object.freeze({
   // Control keys
   8: 'Backspace',
-  13: 'Enter',
+  13: 'Enter', // NumpadEnter also produces 13 — we pick main Enter
   27: 'Escape',
   32: 'Space',
   46: 'Delete',
@@ -146,19 +154,29 @@ const KEYCODE_TO_CODE = Object.freeze({
   222: 'Quote',
 });
 
+/**
+ * Derive a human-readable display label from an event.code string.
+ * Used during migration to populate the displayKey field.
+ * @param {string} code - event.code value (e.g., "KeyS", "Digit5", "F10")
+ * @returns {string} Display-friendly label (e.g., "s", "5", "F10")
+ */
 function displayKeyFromCode(code) {
   if (!code) {
     return '';
   }
+  // Letter keys: "KeyA" → "a"
   if (code.startsWith('Key') && code.length === 4) {
     return code.charAt(3).toLowerCase();
   }
+  // Digit row: "Digit5" → "5"
   if (code.startsWith('Digit') && code.length === 6) {
     return code.charAt(5);
   }
+  // Numpad digits: "Numpad3" → "Num 3"
   if (/^Numpad\d$/.test(code)) {
     return `Num ${code.charAt(6)}`;
   }
+  // Numpad operators
   const numpadOps = {
     NumpadEnter: 'Num Enter',
     NumpadMultiply: 'Num *',
@@ -170,6 +188,7 @@ function displayKeyFromCode(code) {
   if (numpadOps[code]) {
     return numpadOps[code];
   }
+  // Punctuation: map code name to the actual character
   const punctuation = {
     Semicolon: ';',
     Equal: '=',
@@ -186,9 +205,12 @@ function displayKeyFromCode(code) {
   if (punctuation[code]) {
     return punctuation[code];
   }
+  // Everything else (Space, Backspace, Enter, Escape, Arrow*, F1-F24, Delete, etc.)
+  // is already human-readable as-is
   return code;
 }
 
+/** All predefined action names, in display order. */
 const PREDEFINED_ACTIONS = [
   'slower',
   'faster',
@@ -201,6 +223,11 @@ const PREDEFINED_ACTIONS = [
   'jump',
 ];
 
+/**
+ * Complete default bindings for all predefined actions (v2 schema).
+ * Single source of truth — used by DEFAULT_SETTINGS (constants.js),
+ * migration Phase 4 (background.js), and restore_defaults (options.js).
+ */
 const DEFAULT_BINDINGS = Object.freeze({
   slower: { code: 'KeyS', key: 83, keyCode: 83, displayKey: 's', value: 0.1 },
   faster: { code: 'KeyD', key: 68, keyCode: 68, displayKey: 'd', value: 0.1 },
@@ -213,6 +240,7 @@ const DEFAULT_BINDINGS = Object.freeze({
   jump: { code: 'KeyJ', key: 74, keyCode: 74, displayKey: 'j', value: 0 },
 });
 
+/** event.code values that must not be recorded as shortcuts. */
 const BLACKLISTED_CODES = new Set([
   'Tab',
   'ShiftLeft',
@@ -229,6 +257,7 @@ const BLACKLISTED_CODES = new Set([
   'ScrollLock',
 ]);
 
+// UXP: stands in for upstream's ES module exports (constants.js reads these).
 window.VSC = window.VSC || {};
 window.VSC.PREDEFINED_CODE_MAP = PREDEFINED_CODE_MAP;
 window.VSC.KEYCODE_TO_CODE = KEYCODE_TO_CODE;
@@ -236,3 +265,5 @@ window.VSC.displayKeyFromCode = displayKeyFromCode;
 window.VSC.PREDEFINED_ACTIONS = PREDEFINED_ACTIONS;
 window.VSC.DEFAULT_BINDINGS = DEFAULT_BINDINGS;
 window.VSC.BLACKLISTED_CODES = BLACKLISTED_CODES;
+
+})();
