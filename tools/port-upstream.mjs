@@ -537,21 +537,6 @@ if (typeof window.requestIdleCallback === 'undefined') {
         target && typeof target.closest === 'function' ? target.closest('.vsc-controller') : null;`,
       ],
       ['      const controller = v.vsc?.div;', '      const controller = v.vsc && v.vsc.div;'],
-      [
-        `      case 'reset':
-        window.VSC.logger.debug('Reset speed');
-        this.resetSpeed(video, value, this.config.getKeyBinding('fast'), options);
-        break;`,
-        `      case 'reset':
-        // UXP fork deviation (user decision): R is a literal "reset to target"
-        // (default 1.0). Upstream routes R through resetSpeed(), which
-        // remembers the previous speed and cross-toggles with the 'fast'
-        // preset; the fork found that confusing and sets the target directly.
-        // Still a USER_SET, so it claims authority like every VSC command.
-        window.VSC.logger.debug('Reset speed');
-        this.adjustSpeed(video, value, { authorityBatch: options.authorityBatch });
-        break;`,
-      ],
       {
         from: '  toggleControllerVisibility(video) {',
         through: `    if (nextOverride !== null) {
