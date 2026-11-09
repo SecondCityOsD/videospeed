@@ -1016,6 +1016,318 @@ window.VSC.VideoController = VideoController;`,
       ],
     ],
   },
+
+  'core/state-manager.js': {
+    edits: [
+      [
+        "    window.VSC.logger?.debug('VSCStateManager initialized');",
+        `    if (window.VSC.logger) {
+      window.VSC.logger.debug('VSCStateManager initialized');
+    }`,
+      ],
+      [
+        "      window.VSC.logger?.warn('Invalid controller registration attempt');",
+        `      if (window.VSC.logger) {
+        window.VSC.logger.warn('Invalid controller registration attempt');
+      }`,
+      ],
+      [
+        '      tagName: controller.video?.tagName,',
+        '      tagName: controller.video ? controller.video.tagName : undefined,',
+      ],
+      [
+        '      videoSrc: controller.video?.src || controller.video?.currentSrc,',
+        `      videoSrc: controller.video
+        ? controller.video.src || controller.video.currentSrc
+        : undefined,`,
+      ],
+      [
+        '    window.VSC.logger?.debug(`Controller registered: ${controller.controllerId}`);',
+        `    if (window.VSC.logger) {
+      window.VSC.logger.debug(\`Controller registered: \${controller.controllerId}\`);
+    }`,
+      ],
+      [
+        '      window.VSC.logger?.debug(`Controller unregistered: ${controllerId}`);',
+        `      if (window.VSC.logger) {
+        window.VSC.logger.debug(\`Controller unregistered: \${controllerId}\`);
+      }`,
+      ],
+      [
+        '      const video = info.controller?.video || info.element;',
+        '      const video = (info.controller && info.controller.video) || info.element;',
+      ],
+      [
+        '    return info?.controller?.video || info?.element || null;',
+        '    return (info && info.controller && info.controller.video) || (info && info.element) || null;',
+      ],
+      [
+        "window.VSC.logger?.info('State Manager module loaded');",
+        `if (window.VSC.logger) {
+  window.VSC.logger.info('State Manager module loaded');
+}`,
+      ],
+    ],
+  },
+
+  'content/inject.js': {
+    // Upstream has no window.VSC line; wrap after the file header.
+    anchor: 'class VideoSpeedExtension {',
+    edits: [
+      [
+        `  async initialize() {
+    try {
+      // Access global modules`,
+        `  async initialize() {
+    try {
+      // UXP: every module is its own <script> tag, so one can fail to load
+      // (CSP, 404, parse error) while the rest run. Bail out cleanly instead
+      // of crashing deep inside a constructor.
+      const required = [
+        'VideoController', 'ActionHandler', 'EventManager', 'logger',
+        'DomUtils', 'siteHandlerManager', 'VideoMutationObserver',
+        'MediaElementObserver', 'Constants', 'videoSpeedConfig',
+        'stateManager', 'DEFAULT_CONTROLLER_CSS', 'ShadowDOMManager',
+        'ControlsManager', 'DragHandler', 'SpeedArbiter', 'IntentClassifier',
+        'SpeedArbitration', 'ControllerVisibility',
+      ];
+      const missing = required.filter((name) => !window.VSC[name]);
+      if (missing.length) {
+        console.error('[VSC] Missing required modules — bailing out: ' + missing.join(', '));
+        return;
+      }
+
+      // Access global modules`,
+      ],
+      [
+        `      this.logger.error(\`Failed to initialize Video Speed Controller: \${error.message}\`);
+      this.logger.error(\`Error stack: \${error.stack}\`);`,
+        `      // UXP: also report to the console — the logger buffers until settings
+      // load, so an early failure would otherwise never be printed (and
+      // this.logger is unset if the failure came before it was assigned).
+      console.error('[VSC] Init failed: ' + error.message, error.stack);
+      if (this.logger) {
+        this.logger.error(\`Failed to initialize Video Speed Controller: \${error.message}\`);
+        this.logger.error(\`Error stack: \${error.stack}\`);
+      }`,
+      ],
+      {
+        from: '  /**\n   * Inject controller CSS via adoptedStyleSheets',
+        through: '        this._customSheet = null;\n      }\n    });\n  }',
+        to: `  /**
+   * UXP: Pale Moon has no Constructable Stylesheets (new CSSStyleSheet /
+   * document.adoptedStyleSheets), so controller CSS goes in <style> elements.
+   * Same two-sheet split as upstream: _controllerSheet (built-in defaults,
+   * domain-preprocessed, never changes at runtime) and _customSheet (user
+   * additions, injected raw, live-updatable).
+   * @param {string} css
+   * @param {string} [id]
+   * @returns {HTMLStyleElement}
+   * @private
+   */
+  _appendStyle(css, id) {
+    const styleEl = document.createElement('style');
+    if (id) {
+      styleEl.id = id;
+    }
+    styleEl.textContent = css;
+    (document.head || document.documentElement).appendChild(styleEl);
+    return styleEl;
+  }
+
+  injectControllerCSS() {
+    try {
+      if (this._controllerSheet) {
+        return;
+      }
+      this._controllerSheet = this._appendStyle(
+        this.preprocessDomainCSS(window.VSC.Constants.DEFAULT_CONTROLLER_CSS),
+        'vsc-controller-defaults'
+      );
+
+      const customCSS = this.config.settings.customCSS || '';
+      if (customCSS) {
+        this._customSheet = this._appendStyle(customCSS, 'vsc-controller-custom');
+      }
+    } catch (error) {
+      this.logger.error(\`Failed to inject controller CSS: \${error.message}\`);
+    }
+  }
+
+  /** Live-update the user's custom CSS when options are saved. */
+  setupCSSLiveUpdates() {
+    document.documentElement.addEventListener('VSC_STORAGE_CHANGED', (e) => {
+      const cssChange = e.detail && e.detail.customCSS;
+      if (!cssChange || cssChange.newValue === undefined || !this._controllerSheet) {
+        return;
+      }
+      const customCSS = cssChange.newValue || '';
+      if (customCSS) {
+        if (!this._customSheet) {
+          this._customSheet = this._appendStyle(customCSS, 'vsc-controller-custom');
+        } else {
+          this._customSheet.textContent = customCSS;
+        }
+      } else if (this._customSheet) {
+        this._customSheet.remove();
+        this._customSheet = null;
+      }
+    });
+  }`,
+      },
+      [
+        `    // Remove adopted controller CSS (both default and custom sheets)
+    if (document.adoptedStyleSheets) {
+      document.adoptedStyleSheets = document.adoptedStyleSheets.filter(
+        (s) => s !== this._controllerSheet && s !== this._customSheet
+      );
+    }`,
+        `    // Remove controller CSS (both default and custom sheets). UXP: these are
+    // <style> elements, not adopted stylesheets.
+    if (this._controllerSheet) {
+      this._controllerSheet.remove();
+    }
+    if (this._customSheet) {
+      this._customSheet.remove();
+    }`,
+      ],
+      [
+        `(function () {
+  const extension = new VideoSpeedExtension();
+`,
+        `(function () {
+  // UXP: single-flight guard hoisted to the top. Upstream registers its
+  // VSC_MESSAGE listener first, then skips only an already-initialized
+  // instance; a second injection into the same document must neither
+  // double-register listeners nor run initialize() twice in parallel.
+  if (window.VSC_controller) {
+    return;
+  }
+
+  const extension = new VideoSpeedExtension();
+  window.VSC_controller = extension;
+
+  // UXP: SPA-navigation safety net.
+  //
+  // YouTube, Twitter, Vimeo, etc. swap videos via history.pushState — no
+  // DOMContentLoaded refires, and the mutation observer doesn't always catch
+  // the new <video> (racing rebuilds, lazy media loaders, aggressive
+  // userscript reskins like VORAPIS V3).
+  //
+  // We share the page's JS world, so instead of polling location.href on a
+  // permanent 1 s interval (which ran on EVERY page forever, even pages with
+  // no media), hook the History API plus popstate/hashchange. On any URL
+  // change we wait 500 ms for the SPA to settle, then rescan and attach
+  // controllers to any video that doesn't already have one.
+  let __vscLastUrl = location.href;
+  const __vscRescan = () => {
+    if (location.href === __vscLastUrl) {
+      return;
+    }
+    __vscLastUrl = location.href;
+    if (window.VSC && window.VSC.logger) {
+      window.VSC.logger.debug('SPA navigation detected — re-scanning for media');
+    }
+    setTimeout(() => {
+      try {
+        if (!extension.mediaObserver) return;
+        const media = extension.mediaObserver.scanForMedia(document);
+        media.forEach((m) => {
+          if (!m.vsc) {
+            extension.onVideoFound(m, m.parentElement || m.parentNode);
+          }
+        });
+      } catch (e) {
+        if (window.VSC && window.VSC.logger) {
+          window.VSC.logger.error('SPA-nav rescan failed: ' + e.message);
+        }
+      }
+    }, 500);
+  };
+
+  // Wrap pushState/replaceState so programmatic navigations notify us. The
+  // __vscWrapped guard prevents double-wrapping if another script (or a second
+  // injection) also wraps them.
+  const __vscWrapHistory = (method) => {
+    try {
+      const orig = history[method];
+      if (typeof orig !== 'function' || orig.__vscWrapped) {
+        return;
+      }
+      const wrapped = function () {
+        const ret = orig.apply(this, arguments);
+        try {
+          __vscRescan();
+        } catch (e) {
+          /* ignored */
+        }
+        return ret;
+      };
+      wrapped.__vscWrapped = true;
+      history[method] = wrapped;
+    } catch (e) {
+      // history not writable on this page — popstate/hashchange still cover
+      // back/forward and hash navigations.
+    }
+  };
+  __vscWrapHistory('pushState');
+  __vscWrapHistory('replaceState');
+  window.addEventListener('popstate', __vscRescan);
+  window.addEventListener('hashchange', __vscRescan);
+`,
+      ],
+      [
+        `            window.VSC.logger?.debug(
+              \`Set speed to \${targetSpeed} on \${videos.length} media elements\`
+            );`,
+        `            if (window.VSC.logger) {
+              window.VSC.logger.debug(
+                \`Set speed to \${targetSpeed} on \${videos.length} media elements\`
+              );
+            }`,
+      ],
+      [
+        `            window.VSC.logger?.debug(
+              \`Adjusted speed by \${delta} on \${videos.length} media elements\`
+            );`,
+        `            if (window.VSC.logger) {
+              window.VSC.logger.debug(
+                \`Adjusted speed by \${delta} on \${videos.length} media elements\`
+              );
+            }`,
+      ],
+      [
+        '          window.VSC.logger?.debug(`Reset speed on ${videos.length} media elements`);',
+        `          if (window.VSC.logger) {
+            window.VSC.logger.debug(\`Reset speed on \${videos.length} media elements\`);
+          }`,
+      ],
+      [
+        `  // Prevent double injection
+  if (window.VSC_controller && window.VSC_controller.initialized) {
+    window.VSC.logger?.info('VSC already initialized, skipping re-injection');
+    return;
+  }
+
+  // Auto-initialize
+  extension.initialize().catch((error) => {
+    window.VSC.logger.error(\`Extension initialization failed: \${error.message}\`);
+  });
+
+  // Export only what's needed with consistent VSC_ prefix
+  window.VSC_controller = extension; // The initialized instance
+})();`,
+        `  // Auto-initialize (the double-injection guard and the VSC_controller export
+  // moved to the top of this function — see above).
+  extension.initialize().catch((error) => {
+    // UXP: console too — see initialize().
+    console.error('[VSC] Extension initialization failed:', error.message);
+    window.VSC.logger.error(\`Extension initialization failed: \${error.message}\`);
+  });
+})();`,
+      ],
+    ],
+  },
 };
 
 // ---------------------------------------------------------------------------
