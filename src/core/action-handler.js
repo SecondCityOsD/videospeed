@@ -184,26 +184,33 @@ class ActionHandler {
    * @param {HTMLMediaElement} video - Media element whose controller is toggled
    */
   toggleControllerVisibility(video) {
-    // UXP-INTERIM (until the controller-UI phase ports the CSS): the fork's
-    // plain-DOM stylesheet does not render data-vsc-visibility yet, so the V
-    // toggle keeps the 0.10.2 class logic. Upstream's
-    // ControllerVisibility.nextOverride() toggle replaces this with that port.
     const controller = video.vsc && video.vsc.div;
     if (!controller) {
       window.VSC.logger.error('No controller found for video');
       return;
     }
 
+    const visibility = window.VSC.ControllerVisibility;
+    const currentOverride = visibility.normalizeOverride(controller.dataset.vscVisibility);
+    // Sample before cancelling a flash: the first V press must flip what the
+    // user currently sees, including temporary speed feedback.
+    const isVisible =
+      currentOverride === visibility.OVERRIDES.AUTO
+        ? this.isControllerVisible(controller)
+        : undefined;
+    const nextOverride =
+      currentOverride === visibility.OVERRIDES.AUTO && isVisible === null
+        ? null
+        : visibility.nextOverride(currentOverride, isVisible);
+
     if (controller.flashTimer !== undefined) {
       clearTimeout(controller.flashTimer);
       controller.flashTimer = undefined;
     }
+    controller.classList.remove('vsc-show');
 
-    controller.classList.toggle('vsc-hidden');
-    controller.classList.add('vsc-manual');
-
-    if (controller.classList.contains('vsc-hidden')) {
-      controller.classList.remove('vsc-show');
+    if (nextOverride !== null) {
+      controller.dataset.vscVisibility = nextOverride;
     }
   }
 
@@ -216,9 +223,10 @@ class ActionHandler {
    * @returns {boolean|null} Whether it is rendered, or null when unavailable
    */
   isControllerVisible(controller) {
-    const innerController = controller.shadowRoot
-      ? window.VSC.ShadowDOMManager.getController(controller.shadowRoot)
-      : null;
+    // UXP: plain-DOM controller — ShadowDOMManager.getRoot() stands in for
+    // the host's shadowRoot.
+    const root = window.VSC.ShadowDOMManager.getRoot(controller);
+    const innerController = root ? window.VSC.ShadowDOMManager.getController(root) : null;
     if (!innerController) {
       window.VSC.logger.error('Controller shadow content not found');
       return null;
@@ -377,18 +385,17 @@ class ActionHandler {
    * @param {number} duration - Duration in ms (default 2000)
    */
   flashController(controller, duration) {
-    // UXP-INTERIM (until the controller-UI phase): the 0.10.2 gate — startHidden
-    // and a manual V-hide block feedback. Upstream's
-    // ControllerVisibility.allowsFlash() gate replaces this with the CSS port.
-    if (this.config.settings.startHidden) {
-      window.VSC.logger.debug('flashController skipped: startHidden preference');
-      return;
-    }
+    const visibility = window.VSC.ControllerVisibility;
+    const override = visibility.normalizeOverride(controller.dataset.vscVisibility);
     if (
-      controller.classList.contains('vsc-manual') &&
-      controller.classList.contains('vsc-hidden')
+      !visibility.allowsFlash({
+        attached: true,
+        startHidden: this.config.settings.startHidden,
+        override,
+      })
     ) {
-      window.VSC.logger.debug('flashController skipped: user hide');
+      const reason = this.config.settings.startHidden ? 'startHidden preference' : 'user hide';
+      window.VSC.logger.debug(`flashController skipped: ${reason}`);
       return;
     }
 

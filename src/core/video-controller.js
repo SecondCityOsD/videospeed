@@ -141,53 +141,43 @@ class VideoController {
    * @private
    */
   initializeControls() {
-    // UXP-INTERIM (until the controller-UI phase): the fork's 0.10.2 wrapper —
-    // a plain-DOM div positioned inline before insertion. Upstream 0.11 moves
-    // positioning into CSS (wrapper gets z-index only; the inner controller is
-    // offset after insertion), which has to land together with the
-    // shadow-dom.js / controller-css-defaults.js port and must be reconciled
-    // with the transformed-ancestor escape below.
     window.VSC.logger.debug('initializeControls Begin');
 
     const document = this.video.ownerDocument;
-    const speed = this.video.playbackRate.toFixed(2);
-    const position = window.VSC.ShadowDOMManager.calculatePosition(this.video);
+    const speed = window.VSC.Constants.formatSpeed(this.video.playbackRate);
 
     window.VSC.logger.debug(`Speed variable set to: ${speed}`);
 
-    // Create wrapper element
-    const wrapper = document.createElement('div');
-    wrapper.classList.add('vsc-controller');
+    // Create custom element wrapper to avoid CSS conflicts
+    const wrapper = document.createElement('vsc-controller');
 
-    // Set positioning styles with calculated position
-    // Use inline styles without !important so CSS rules can override
-    wrapper.style.cssText = `
-      position: absolute !important;
-      z-index: 9999999 !important;
-      top: ${position.top};
-      left: ${position.left};
-    `;
+    // Apply all CSS classes at once to prevent race condition flash
+    const cssClasses = ['vsc-controller'];
 
     // Only hide controller if video has no source AND is not ready/functional
     // This prevents hiding controllers for live streams or dynamically loaded videos
     if (!this.video.currentSrc && !this.video.src && this.video.readyState < 2) {
-      wrapper.classList.add('vsc-nosource');
+      cssClasses.push('vsc-nosource');
     }
 
     if (this.config.settings.startHidden || this.shouldStartHidden) {
-      wrapper.classList.add('vsc-hidden');
-      if (this.shouldStartHidden) {
-        window.VSC.logger.debug('Starting controller hidden due to video visibility/size');
-      }
-    } else {
-      // Ensure controller is visible, especially on YouTube
-      wrapper.classList.add('vsc-show');
+      cssClasses.push('vsc-hidden');
+      window.VSC.logger.debug('Starting controller hidden');
     }
+    // When startHidden=false, use natural visibility (no special class needed)
 
-    // Create shadow DOM with relative positioning inside shadow root
+    // Apply all classes at once to prevent visible flash
+    wrapper.className = cssClasses.join(' ');
+
+    // IMPORTANT: Wrapper gets z-index ONLY — no position, no top, no left.
+    // Position is controlled by inject.css (default: absolute; site overrides: relative).
+    // Adding inline position here would defeat CSS site overrides via specificity.
+    wrapper.style.cssText = 'z-index: 9999999 !important;';
+
+    // Create shadow DOM with placeholder position (set after insertion)
     const shadow = window.VSC.ShadowDOMManager.createShadowDOM(wrapper, {
-      top: '0px', // Position relative to shadow root since wrapper is already positioned
-      left: '0px', // Position relative to shadow root since wrapper is already positioned
+      top: '0px',
+      left: '0px',
       speed: speed,
       opacity: this.config.settings.controllerOpacity,
       buttonSize: this.config.settings.controllerButtonSize,
@@ -199,8 +189,23 @@ class VideoController {
     // Store speed indicator reference
     this.speedIndicator = window.VSC.ShadowDOMManager.getSpeedIndicator(shadow);
 
-    // Insert into DOM based on site-specific rules
+    // Insert into DOM FIRST — position calculation needs the wrapper in the DOM
     this.insertIntoDOM(document, wrapper);
+
+    // THEN compute position based on actual DOM state.
+    // If a CSS override sets the wrapper to position:relative (e.g. YouTube, Netflix),
+    // the inner controller stays at (0,0) and the CSS nudge handles placement.
+    // Otherwise (wrapper is absolute), compute coordinates for generic sites.
+    // UXP: a host re-parented to <body> by the transformed-ancestor escape
+    // (insertIntoDOM) is already pinned to the video's viewport rect, so the
+    // inner controller stays at 0,0 there or it would be offset twice.
+    const computedPosition = getComputedStyle(wrapper).position;
+    if (computedPosition !== 'relative' && !this._viewportUpdate) {
+      const position = window.VSC.ShadowDOMManager.calculatePosition(this.video);
+      const innerController = window.VSC.ShadowDOMManager.getController(shadow);
+      innerController.style.top = position.top;
+      innerController.style.left = position.left;
+    }
 
     window.VSC.logger.debug('initializeControls End');
     return wrapper;
@@ -315,7 +320,7 @@ class VideoController {
     // document.body we've ensured that.
     wrapper.style.setProperty('position', 'fixed', 'important');
 
-    // Suppress the absolute-position fallback styles seeded by initializeControls.
+    // Start at the viewport origin; update() pins it to the video below.
     wrapper.style.setProperty('top', '0px', 'important');
     wrapper.style.setProperty('left', '0px', 'important');
 
@@ -613,24 +618,21 @@ class VideoController {
    * Called when video visibility changes
    */
   updateVisibility() {
-    // UXP-INTERIM (until the controller-UI phase): keeps the 0.10.2
-    // `vsc-manual` guard that the interim V toggle relies on. Upstream keeps
-    // this automatic layer independent of the explicit override.
     const isVisible = this.isVideoVisible();
     const isCurrentlyHidden = this.div.classList.contains('vsc-hidden');
 
     // Special handling for audio elements - don't hide controllers for functional audio
     if (this.video.tagName === 'AUDIO') {
-      // For audio, only hide if manually hidden or if audio support is disabled
+      // Preserve startHidden; otherwise audio support controls automatic visibility.
       if (!this.config.settings.audioBoolean && !isCurrentlyHidden) {
         this.div.classList.add('vsc-hidden');
         window.VSC.logger.debug('Hiding audio controller - audio support disabled');
       } else if (
         this.config.settings.audioBoolean &&
         isCurrentlyHidden &&
-        !this.div.classList.contains('vsc-manual')
+        !this.config.settings.startHidden
       ) {
-        // Show audio controller if audio support is enabled and not manually hidden
+        // Keep the automatic layer current beneath any explicit override.
         this.div.classList.remove('vsc-hidden');
         window.VSC.logger.debug('Showing audio controller - audio support enabled');
       }
@@ -638,15 +640,8 @@ class VideoController {
     }
 
     // Original logic for video elements
-    if (
-      isVisible &&
-      isCurrentlyHidden &&
-      !this.div.classList.contains('vsc-manual') &&
-      // Respect the user's `startHidden` preference as a hard floor — never
-      // auto-show the controller if they've asked for it to start hidden.
-      !this.config.settings.startHidden
-    ) {
-      // Video became visible and controller is hidden (but not manually hidden)
+    if (isVisible && isCurrentlyHidden && !this.config.settings.startHidden) {
+      // Keep automatic visibility current beneath any explicit override.
       this.div.classList.remove('vsc-hidden');
       window.VSC.logger.debug('Showing controller - video became visible');
     } else if (!isVisible && !isCurrentlyHidden) {

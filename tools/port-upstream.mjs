@@ -537,56 +537,16 @@ if (typeof window.requestIdleCallback === 'undefined') {
         target && typeof target.closest === 'function' ? target.closest('.vsc-controller') : null;`,
       ],
       ['      const controller = v.vsc?.div;', '      const controller = v.vsc && v.vsc.div;'],
-      {
-        from: '  toggleControllerVisibility(video) {',
-        through: `    if (nextOverride !== null) {
-      controller.dataset.vscVisibility = nextOverride;
-    }
-  }`,
-        to: `  toggleControllerVisibility(video) {
-    // UXP-INTERIM (until the controller-UI phase ports the CSS): the fork's
-    // plain-DOM stylesheet does not render data-vsc-visibility yet, so the V
-    // toggle keeps the 0.10.2 class logic. Upstream's
-    // ControllerVisibility.nextOverride() toggle replaces this with that port.
-    const controller = video.vsc && video.vsc.div;
-    if (!controller) {
-      window.VSC.logger.error('No controller found for video');
-      return;
-    }
-
-    if (controller.flashTimer !== undefined) {
-      clearTimeout(controller.flashTimer);
-      controller.flashTimer = undefined;
-    }
-
-    controller.classList.toggle('vsc-hidden');
-    controller.classList.add('vsc-manual');
-
-    if (controller.classList.contains('vsc-hidden')) {
-      controller.classList.remove('vsc-show');
-    }
-  }`,
-      },
-      {
-        from: '  flashController(controller, duration) {',
-        through:
-          '      window.VSC.logger.debug(`flashController skipped: ${reason}`);\n      return;\n    }',
-        to: `  flashController(controller, duration) {
-    // UXP-INTERIM (until the controller-UI phase): the 0.10.2 gate — startHidden
-    // and a manual V-hide block feedback. Upstream's
-    // ControllerVisibility.allowsFlash() gate replaces this with the CSS port.
-    if (this.config.settings.startHidden) {
-      window.VSC.logger.debug('flashController skipped: startHidden preference');
-      return;
-    }
-    if (
-      controller.classList.contains('vsc-manual') &&
-      controller.classList.contains('vsc-hidden')
-    ) {
-      window.VSC.logger.debug('flashController skipped: user hide');
-      return;
-    }`,
-      },
+      ['    const controller = video.vsc?.div;', '    const controller = video.vsc && video.vsc.div;'],
+      [
+        `    const innerController = controller.shadowRoot
+      ? window.VSC.ShadowDOMManager.getController(controller.shadowRoot)
+      : null;`,
+        `    // UXP: plain-DOM controller — ShadowDOMManager.getRoot() stands in for
+    // the host's shadowRoot.
+    const root = window.VSC.ShadowDOMManager.getRoot(controller);
+    const innerController = root ? window.VSC.ShadowDOMManager.getController(root) : null;`,
+      ],
       [
         '    if (this.eventManager?.arbitration) {',
         '    if (this.eventManager && this.eventManager.arbitration) {',
@@ -628,75 +588,15 @@ if (typeof window.requestIdleCallback === 'undefined') {
         this.arbitration.classifier.observeMediaInit(this.video, performance.now());
       }`,
       ],
-      {
-        from: '  initializeControls() {',
-        through: "    window.VSC.logger.debug('initializeControls End');\n    return wrapper;\n  }",
-        to: `  initializeControls() {
-    // UXP-INTERIM (until the controller-UI phase): the fork's 0.10.2 wrapper —
-    // a plain-DOM div positioned inline before insertion. Upstream 0.11 moves
-    // positioning into CSS (wrapper gets z-index only; the inner controller is
-    // offset after insertion), which has to land together with the
-    // shadow-dom.js / controller-css-defaults.js port and must be reconciled
-    // with the transformed-ancestor escape below.
-    window.VSC.logger.debug('initializeControls Begin');
-
-    const document = this.video.ownerDocument;
-    const speed = this.video.playbackRate.toFixed(2);
-    const position = window.VSC.ShadowDOMManager.calculatePosition(this.video);
-
-    window.VSC.logger.debug(\`Speed variable set to: \${speed}\`);
-
-    // Create wrapper element
-    const wrapper = document.createElement('div');
-    wrapper.classList.add('vsc-controller');
-
-    // Set positioning styles with calculated position
-    // Use inline styles without !important so CSS rules can override
-    wrapper.style.cssText = \`
-      position: absolute !important;
-      z-index: 9999999 !important;
-      top: \${position.top};
-      left: \${position.left};
-    \`;
-
-    // Only hide controller if video has no source AND is not ready/functional
-    // This prevents hiding controllers for live streams or dynamically loaded videos
-    if (!this.video.currentSrc && !this.video.src && this.video.readyState < 2) {
-      wrapper.classList.add('vsc-nosource');
-    }
-
-    if (this.config.settings.startHidden || this.shouldStartHidden) {
-      wrapper.classList.add('vsc-hidden');
-      if (this.shouldStartHidden) {
-        window.VSC.logger.debug('Starting controller hidden due to video visibility/size');
-      }
-    } else {
-      // Ensure controller is visible, especially on YouTube
-      wrapper.classList.add('vsc-show');
-    }
-
-    // Create shadow DOM with relative positioning inside shadow root
-    const shadow = window.VSC.ShadowDOMManager.createShadowDOM(wrapper, {
-      top: '0px', // Position relative to shadow root since wrapper is already positioned
-      left: '0px', // Position relative to shadow root since wrapper is already positioned
-      speed: speed,
-      opacity: this.config.settings.controllerOpacity,
-      buttonSize: this.config.settings.controllerButtonSize,
-    });
-
-    // Set up control events
-    this.controlsManager.setupControlEvents(shadow, this.video);
-
-    // Store speed indicator reference
-    this.speedIndicator = window.VSC.ShadowDOMManager.getSpeedIndicator(shadow);
-
-    // Insert into DOM based on site-specific rules
-    this.insertIntoDOM(document, wrapper);
-
-    window.VSC.logger.debug('initializeControls End');
-    return wrapper;
-  }`,
-      },
+      [
+        `    const computedPosition = getComputedStyle(wrapper).position;
+    if (computedPosition !== 'relative') {`,
+        `    // UXP: a host re-parented to <body> by the transformed-ancestor escape
+    // (insertIntoDOM) is already pinned to the video's viewport rect, so the
+    // inner controller stays at 0,0 there or it would be offset twice.
+    const computedPosition = getComputedStyle(wrapper).position;
+    if (computedPosition !== 'relative' && !this._viewportUpdate) {`,
+      ],
       [
         `      this.video
     );
@@ -782,7 +682,7 @@ if (typeof window.requestIdleCallback === 'undefined') {
     // document.body we've ensured that.
     wrapper.style.setProperty('position', 'fixed', 'important');
 
-    // Suppress the absolute-position fallback styles seeded by initializeControls.
+    // Start at the viewport origin; update() pins it to the video below.
     wrapper.style.setProperty('top', '0px', 'important');
     wrapper.style.setProperty('left', '0px', 'important');
 
@@ -934,54 +834,6 @@ if (typeof window.requestIdleCallback === 'undefined') {
     });
   }`,
       ],
-      {
-        from: '  updateVisibility() {',
-        through:
-          "      window.VSC.logger.debug('Hiding controller - video became invisible');\n    }\n  }",
-        to: `  updateVisibility() {
-    // UXP-INTERIM (until the controller-UI phase): keeps the 0.10.2
-    // \`vsc-manual\` guard that the interim V toggle relies on. Upstream keeps
-    // this automatic layer independent of the explicit override.
-    const isVisible = this.isVideoVisible();
-    const isCurrentlyHidden = this.div.classList.contains('vsc-hidden');
-
-    // Special handling for audio elements - don't hide controllers for functional audio
-    if (this.video.tagName === 'AUDIO') {
-      // For audio, only hide if manually hidden or if audio support is disabled
-      if (!this.config.settings.audioBoolean && !isCurrentlyHidden) {
-        this.div.classList.add('vsc-hidden');
-        window.VSC.logger.debug('Hiding audio controller - audio support disabled');
-      } else if (
-        this.config.settings.audioBoolean &&
-        isCurrentlyHidden &&
-        !this.div.classList.contains('vsc-manual')
-      ) {
-        // Show audio controller if audio support is enabled and not manually hidden
-        this.div.classList.remove('vsc-hidden');
-        window.VSC.logger.debug('Showing audio controller - audio support enabled');
-      }
-      return;
-    }
-
-    // Original logic for video elements
-    if (
-      isVisible &&
-      isCurrentlyHidden &&
-      !this.div.classList.contains('vsc-manual') &&
-      // Respect the user's \`startHidden\` preference as a hard floor — never
-      // auto-show the controller if they've asked for it to start hidden.
-      !this.config.settings.startHidden
-    ) {
-      // Video became visible and controller is hidden (but not manually hidden)
-      this.div.classList.remove('vsc-hidden');
-      window.VSC.logger.debug('Showing controller - video became visible');
-    } else if (!isVisible && !isCurrentlyHidden) {
-      // Video became invisible and controller is visible
-      this.div.classList.add('vsc-hidden');
-      window.VSC.logger.debug('Hiding controller - video became invisible');
-    }
-  }`,
-      },
       [
         `
 }
@@ -1331,6 +1183,18 @@ window.VSC.VideoController = VideoController;`,
 };
 
 // ---------------------------------------------------------------------------
+// Fork-native files: rewritten for UXP instead of generated from upstream,
+// because upstream's version is built on something Pale Moon lacks. Listed so
+// the inventory is complete; on every upgrade, review each one by hand against
+// the upstream file(s) it tracks.
+// ---------------------------------------------------------------------------
+const NATIVE = {
+  'ui/shadow-dom.js': 'upstream ui/shadow-dom.js (plain-DOM controller instead of a shadow root)',
+  'styles/controller-css-defaults.js':
+    'upstream styles/inject.css + styles/controller-css-defaults.js (no manifest CSS; :has() lists split)',
+};
+
+// ---------------------------------------------------------------------------
 
 /**
  * Apply one registry entry to upstream text. Returns { text, problems }.
@@ -1408,6 +1272,27 @@ function main(argv) {
       console.error(
         `DIFF ${rel}: fork file ${current === null ? 'is missing' : 'differs from upstream + registered edits'}`
       );
+    }
+  }
+
+  // Full runs also account for every other src/ file: fork-native ones must
+  // exist, and the rest are reported as still on their pre-upgrade code.
+  if (!only.length) {
+    for (const [rel, tracks] of Object.entries(NATIVE)) {
+      if (fs.existsSync(path.join(repoRoot, 'src', rel))) {
+        console.log(`native ${rel} — tracks ${tracks}`);
+      } else {
+        failures++;
+        console.error(`MISSING native ${rel}`);
+      }
+    }
+    const unported = fs
+      .readdirSync(path.join(repoRoot, 'src'), { recursive: true })
+      .map((rel) => rel.replace(/\\/g, '/'))
+      .filter((rel) => rel.endsWith('.js') && !PORTS[rel] && !NATIVE[rel])
+      .sort();
+    if (unported.length) {
+      console.log(`not yet ported (${unported.length}): ${unported.join(', ')}`);
     }
   }
   return failures ? 1 : 0;
