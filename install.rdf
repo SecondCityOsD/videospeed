@@ -4,7 +4,7 @@
 
   <Description about="urn:mozilla:install-manifest">
     <em:id>videospeed-uxp@secondcityosd</em:id>
-    <em:version>0.10.2</em:version>
+    <em:version>0.11.1</em:version>
     <em:type>2</em:type>
 
     <em:name>Video Speed Controller</em:name>
