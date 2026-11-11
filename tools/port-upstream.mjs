@@ -403,15 +403,6 @@ const {
   DEFAULT_BINDINGS,
   DEFAULT_CONTROLLER_CSS,
 } = window.VSC;
-
-// UXP: guarded requestIdleCallback stand-in for engines without it;
-// mutation-observer.js calls it unguarded.
-if (typeof window.requestIdleCallback === 'undefined') {
-  window.requestIdleCallback = function(cb, opts) {
-    return setTimeout(cb, (opts && opts.timeout) ? Math.min(opts.timeout, 50) : 1);
-  };
-  window.cancelIdleCallback = function(id) { clearTimeout(id); };
-}
 `,
       ],
     ],
@@ -1242,6 +1233,19 @@ if (typeof window.requestIdleCallback === 'undefined') {
 
   'observers/mutation-observer.js': {
     edits: [
+      [
+        'class VideoMutationObserver {',
+        `// UXP: upstream calls requestIdleCallback unguarded. Where the engine lacks
+// it, a short timeout stands in — scoped to this module rather than installed
+// as a page global the site would see (inject.js checks for it itself).
+const requestIdleCallback =
+  typeof window.requestIdleCallback === 'function'
+    ? window.requestIdleCallback.bind(window)
+    : (callback, options) =>
+        setTimeout(callback, options && options.timeout ? Math.min(options.timeout, 50) : 1);
+
+class VideoMutationObserver {`,
+      ],
       [
         '    this.shadowObservers = new Set();',
         `    // UXP: Map shadowRoot -> MutationObserver so stop() can disconnect them

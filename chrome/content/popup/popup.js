@@ -25,7 +25,7 @@ function sendToContent(message) {
 }
 
 window.addEventListener("load", function() {
-  loadSettingsAndInitialize();
+  initializeSpeedControls();
 
   document.getElementById("config").addEventListener("command", function() {
     // Upstream: chrome.runtime.openOptionsPage() with options_ui.open_in_tab —
@@ -43,10 +43,28 @@ window.addEventListener("load", function() {
     toggleEnabled(!isCurrentlyEnabled, settingsSavedReloadMessage);
   });
 
-  var enabled = true;
-  try { enabled = VSCPrefs.branch.getBoolPref("enabled"); } catch(e) {}
-  toggleEnabledUI(enabled);
+  // Upstream's popup is a fresh page on every opening. The panel keeps this
+  // document, so the overlay announces each opening (onPanelShown) and the
+  // popup re-reads what upstream's would: shortcut values, the enabled state,
+  // and no leftover status line.
+  window.addEventListener("message", function(event) {
+    if (event.data && event.data.type === "VSC_PANEL_SHOWN") {
+      refresh();
+    }
+  });
+  refresh();
 
+  function refresh() {
+    loadSettings();
+    var enabled = true;
+    try { enabled = VSCPrefs.branch.getBoolPref("enabled"); } catch(e) {}
+    toggleEnabledUI(enabled);
+    var status = document.getElementById("status");
+    status.hidden = true;
+    status.setAttribute("value", "");
+  }
+
+  // The toolbar icon follows the pref through the overlay's observer.
   function toggleEnabled(enabled, callback) {
     VSCPrefs.set("enabled", enabled);
     toggleEnabledUI(enabled);
@@ -62,18 +80,6 @@ window.addEventListener("load", function() {
     }
     disableBtn.setAttribute("tooltiptext",
       enabled ? "Disable Extension" : "Enable Extension");
-
-    var mainWindow = getMainWindow();
-    if (mainWindow) {
-      var button = mainWindow.document.getElementById("videospeed-button");
-      if (button) {
-        if (enabled) {
-          button.removeAttribute("status");
-        } else {
-          button.setAttribute("status", "disabled");
-        }
-      }
-    }
   }
 
   function settingsSavedReloadMessage(enabled) {
@@ -86,9 +92,9 @@ window.addEventListener("load", function() {
     status.setAttribute("value", str);
   }
 
-  function loadSettingsAndInitialize() {
-    // VSCPrefs.getAll() already parses JSON_KEYS (keyBindings, speeds) into
-    // their structured form, so we just read `bindings` as an array.
+  // Step and preferred-speed labels from the stored key bindings, with
+  // upstream's fallbacks while none are stored.
+  function loadSettings() {
     var settings = VSCPrefs.getAll();
     var bindings = Array.isArray(settings.keyBindings) ? settings.keyBindings : [];
 
@@ -102,7 +108,6 @@ window.addEventListener("load", function() {
       valueFor('faster', 0.1),
       valueFor('fast', 1.0)
     );
-    initializeSpeedControls();
   }
 
   function updateSpeedControlsUI(slowerStep, fasterStep, resetSpeed) {

@@ -11,6 +11,15 @@
 
 window.VSC = window.VSC || {};
 
+// UXP: upstream calls requestIdleCallback unguarded. Where the engine lacks
+// it, a short timeout stands in — scoped to this module rather than installed
+// as a page global the site would see (inject.js checks for it itself).
+const requestIdleCallback =
+  typeof window.requestIdleCallback === 'function'
+    ? window.requestIdleCallback.bind(window)
+    : (callback, options) =>
+        setTimeout(callback, options && options.timeout ? Math.min(options.timeout, 50) : 1);
+
 class VideoMutationObserver {
   constructor(config, onVideoFound, onVideoRemoved, mediaObserver) {
     this.config = config;

@@ -303,12 +303,15 @@ var VideoSpeedOverlay = {
       return;
     }
 
-    // Upstream strips `enabled` and the legacy `blacklist`; the fork also
-    // strips `siteRules` (privacy) and sends the resolved rule speed instead.
+    // Upstream sends chrome.storage.sync.get(null) — stored keys only; the
+    // page fills the rest from DEFAULT_SETTINGS (storage-manager.js). It
+    // strips `enabled` and the legacy `blacklist`; the fork also strips
+    // `siteRules` (privacy) and sends the resolved rule speed instead.
+    var stored = VSCPrefs.getStored();
     var publicSettings = {};
-    for (var key in settings) {
+    for (var key in stored) {
       if (key === "enabled" || key === "blacklist" || key === "siteRules") continue;
-      publicSettings[key] = settings[key];
+      publicSettings[key] = stored[key];
     }
     var speed = this._siteRuleSpeed(settings, href);
     if (speed !== null) {

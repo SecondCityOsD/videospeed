@@ -4,7 +4,8 @@
 // settings request is left unanswered: this check is about loading. vitest
 // imports modules as ES modules and cannot see these problems.
 //   node tools/upstream-tests/classic-load.mjs
-// Fails on any load error; reports page-global leaks.
+// Fails on any load error, page-global lexical name, or window property
+// beyond the ones upstream itself creates.
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
@@ -47,10 +48,13 @@ const lexical = new vm.Script(
   `[${[...declared].map((n) => `typeof ${n} !== 'undefined' ? '${n}' : null`).join(',')}].filter(Boolean)`
 ).runInContext(ctx);
 const added = Object.getOwnPropertyNames(window).filter((k) => !before.has(k));
+// The page globals upstream's own bundle creates; anything else is a fork leak.
+const UPSTREAM_GLOBALS = ['VSC', 'VSC_controller', 'VSC_settings', 'vscDebugHelper'];
+const extra = added.filter((k) => !UPSTREAM_GLOBALS.includes(k));
 
 console.log(`loaded ${scripts.length} scripts; load errors: ${errors.length}`);
 for (const e of errors) console.log(`  ${e}`);
-console.log(`window properties added: [${added.join(', ')}]`);
+console.log(`window properties added: [${added.join(', ')}]; beyond upstream's: [${extra.join(', ')}]`);
 console.log(`page-global lexical names: ${lexical.length} [${lexical.join(', ')}]`);
 window.close();
-process.exitCode = errors.length ? 1 : 0;
+process.exitCode = errors.length || extra.length || lexical.length ? 1 : 0;

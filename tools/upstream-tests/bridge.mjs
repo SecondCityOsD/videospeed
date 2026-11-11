@@ -50,8 +50,12 @@ function makePage(chrome, url) {
   });
   const { window } = dom;
   const pageErrors = [];
+  const pageWarnings = []; // the VSC logger's WARNING:/ERROR: lines
   window.addEventListener('error', (e) => pageErrors.push(e.message));
-  window.console.log = () => {};
+  window.console.log = (...a) => {
+    const line = a.join(' ');
+    if (/^(WARNING|ERROR):/.test(line)) pageWarnings.push(line);
+  };
   window.console.error = (...a) => pageErrors.push(a.join(' '));
   const rates = new WeakMap();
   const proto = window.HTMLMediaElement.prototype;
@@ -81,7 +85,7 @@ function makePage(chrome, url) {
       new vm.Script(fs.readFileSync(path.join(repoRoot, 'src', rel), 'utf8'), { filename: rel }).runInContext(ctx);
     }
   }
-  return { window, doc, video: doc.querySelector('video'), injected, pageErrors, ready, frames: [] };
+  return { window, doc, video: doc.querySelector('video'), injected, pageErrors, pageWarnings, ready, frames: [] };
 }
 
 const asWindow = (page) => ({ document: page.doc, frames: page.frames.map(asWindow) });
@@ -196,6 +200,23 @@ function selectTab(chrome, page) {
   fresh.VSCPrefs.migrate();
   expect('fresh install keeps the shipped default site rules', fresh.VSCPrefs.getAll().siteRules.map((r) => r.pattern), ['imgur.com', 'teams.microsoft.com', 'meet.google.com']);
   expect('fresh install writes nothing', [...fresh.user.keys()], []);
+}
+
+// --- 4. Fresh install, as upstream's storage.sync.get(null) sees it ----------------
+{
+  const chrome = makeChrome();
+  chrome.overlay.init();
+  const page = makePage(chrome, 'https://www.example.com/watch');
+  const blocked = makePage(chrome, 'https://imgur.com/gallery/x');
+  await tick(500);
+  const payload = page.ready[0] || {};
+  expect('the payload carries stored keys only (none yet)', payload.settings, {});
+  expect('the page runs on the built-in default shortcuts', page.window.VSC.videoSpeedConfig.settings.keyBindings.map((b) => b.code), page.window.VSC.Constants.DEFAULT_SETTINGS.keyBindings.map((b) => b.code));
+  expect('nothing is written back and nothing is logged', [chrome.user.has('keyBindings'), page.pageWarnings, page.pageErrors], [false, [], []]);
+  // UXP: upstream's bridge reads raw storage, so its shipped default rules
+  // disable nothing until the options page saves once; the fork applies them
+  // from the start, as its options page shows them.
+  expect('the shipped default rules apply from the start', blocked.injected, 0);
 }
 
 console.log(failures ? `\n${failures} expectation(s) FAILED` : '\nall expectations passed');

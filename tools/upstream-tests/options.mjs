@@ -127,9 +127,7 @@ const DEFAULTS = await (async () => {
 // --- 1. Fresh open ------------------------------------------------------------
 {
   const p = await openOptions();
-  // constants.js also installs a requestIdleCallback stand-in where the
-  // engine has none (jsdom).
-  const own = p.globals.filter((g) => !['Components', 'requestIdleCallback', 'cancelIdleCallback'].includes(g));
+  const own = p.globals.filter((g) => g !== 'Components');
   expect('scripts load and only VSC + chrome become window globals', own.sort(), ['VSC', 'chrome']);
   expect('opening the page writes nothing (fresh storage stays empty)', [...p.prefs.user.keys()], []);
   expect('default shortcuts render as locked predefined rows', p.$$('#shortcuts-container .row.customs').map((r) => [r.id, r.querySelector('.customDo').disabled]), DEFAULTS.keyBindings.map((b) => [b.action, true]));

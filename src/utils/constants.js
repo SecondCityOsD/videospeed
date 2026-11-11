@@ -26,15 +26,6 @@ const {
   DEFAULT_CONTROLLER_CSS,
 } = window.VSC;
 
-// UXP: guarded requestIdleCallback stand-in for engines without it;
-// mutation-observer.js calls it unguarded.
-if (typeof window.requestIdleCallback === 'undefined') {
-  window.requestIdleCallback = function(cb, opts) {
-    return setTimeout(cb, (opts && opts.timeout) ? Math.min(opts.timeout, 50) : 1);
-  };
-  window.cancelIdleCallback = function(id) { clearTimeout(id); };
-}
-
 if (!window.VSC.Constants.DEFAULT_SETTINGS) {
   // Define constants directly first for ES6 exports
   const regStrip = /^[\r\t\f\v ]+|[\r\t\f\v ]+$/gm;
