@@ -1,31 +1,28 @@
 /**
  * Site handler factory and manager
- * Modular architecture using global variables
  */
+
+// UXP: the fork loads every module as its own classic <script> in page scope;
+// upstream gets one esbuild IIFE around the whole bundle. This wrapper keeps
+// top-level bindings out of the page's global lexical scope, where a site
+// script declaring the same name would throw a redeclaration SyntaxError.
+(function () {
+'use strict';
 
 window.VSC = window.VSC || {};
 
 class SiteHandlerManager {
   constructor() {
     this.currentHandler = null;
-    // Lazy-initialized: this file is loaded before the individual handler
-    // scripts, so reading window.VSC.*Handler in the constructor yields
-    // undefined. Build the list on first use, after all scripts are in scope.
-    this._availableHandlers = null;
-  }
-
-  _getAvailableHandlers() {
-    if (this._availableHandlers === null) {
-      this._availableHandlers = [
-        window.VSC.NetflixHandler,
-        window.VSC.YouTubeHandler,
-        window.VSC.FacebookHandler,
-        window.VSC.AmazonHandler,
-        window.VSC.AppleHandler,
-        window.VSC.DailymotionHandler,
-      ].filter((h) => typeof h === 'function');
-    }
-    return this._availableHandlers;
+    this.availableHandlers = [
+      window.VSC.NetflixHandler,
+      window.VSC.YouTubeHandler,
+      window.VSC.FacebookHandler,
+      window.VSC.AmazonHandler,
+      window.VSC.AppleHandler,
+      window.VSC.DailymotionHandler,
+      window.VSC.FrameHandler,
+    ];
   }
 
   /**
@@ -45,7 +42,7 @@ class SiteHandlerManager {
    * @private
    */
   detectHandler() {
-    for (const HandlerClass of this._getAvailableHandlers()) {
+    for (const HandlerClass of this.availableHandlers) {
       if (HandlerClass.matches()) {
         window.VSC.logger.info(`Using ${HandlerClass.name} for ${location.hostname}`);
         return new HandlerClass();
@@ -77,6 +74,16 @@ class SiteHandlerManager {
   }
 
   /**
+   * Handle speed change for current site
+   * @param {HTMLMediaElement} video - Video element
+   * @param {number} speed - Target speed
+   */
+  handleSpeedChange(video, speed) {
+    const handler = this.getCurrentHandler();
+    handler.handleSpeedChange(video, speed);
+  }
+
+  /**
    * Handle seeking for current site
    * @param {HTMLMediaElement} video - Video element
    * @param {number} seekSeconds - Seconds to seek
@@ -88,37 +95,45 @@ class SiteHandlerManager {
   }
 
   /**
-   * Apply a speed change via the current site handler.
-   * @param {HTMLMediaElement} video
-   * @param {number} speed
-   * @returns {boolean}
-   */
-  handleSpeedChange(video, speed) {
-    const handler = this.getCurrentHandler();
-    return handler.handleSpeedChange(video, speed);
-  }
-
-  /**
    * Check if a video should be ignored
    * @param {HTMLMediaElement} video - Video element
    * @returns {boolean} True if video should be ignored
    */
   shouldIgnoreVideo(video) {
-    // Muted, looping, no-controls <video> is almost always a GIF replacement
-    // (Telegram stickers, Imgur GIFs, hero-image looping clips). Attaching
-    // a controller pollutes feeds with no benefit. Upstream 0.10.2 check.
-    if (
-      video &&
-      video.tagName === 'VIDEO' &&
-      video.loop &&
-      video.muted &&
-      !video.controls
-    ) {
+    const handler = this.getCurrentHandler();
+    if (handler.shouldIgnoreVideo(video)) {
       return true;
     }
 
-    const handler = this.getCurrentHandler();
-    return handler.shouldIgnoreVideo(video);
+    // Detect gif-like videos: muted looping videos with no native controls.
+    // Sites like Telegram, X, Imgur serve animated stickers/GIFs as <video
+    // autoplay loop muted> elements. Showing a speed overlay on these is
+    // visually noisy and not useful.
+    if (video.tagName === 'VIDEO' && video.loop && video.muted && !video.controls) {
+      window.VSC.logger.debug('Video ignored: gif-video pattern (loop + muted + no controls)');
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Resolve a page gesture to one controlled media element when the current
+   * site's player DOM supplies an unambiguous association.
+   * @param {Event} event
+   * @param {HTMLMediaElement[]} mediaElements
+   * @returns {HTMLMediaElement|null}
+   */
+  resolveGestureMedia(event, mediaElements) {
+    return this.getCurrentHandler().resolveGestureMedia(event, mediaElements);
+  }
+
+  /**
+   * Get site-declared intent-classifier rule activations
+   * @returns {Object|null} Partial rule flags, or null for generic rules
+   */
+  getClassifierRules() {
+    return this.getCurrentHandler().getClassifierRules();
   }
 
   /**
@@ -161,3 +176,5 @@ class SiteHandlerManager {
 
 // Create singleton instance
 window.VSC.siteHandlerManager = new SiteHandlerManager();
+
+})();

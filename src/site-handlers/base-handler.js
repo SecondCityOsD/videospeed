@@ -1,7 +1,13 @@
 /**
  * Base class for site-specific handlers
- * Modular architecture using global variables
  */
+
+// UXP: the fork loads every module as its own classic <script> in page scope;
+// upstream gets one esbuild IIFE around the whole bundle. This wrapper keeps
+// top-level bindings out of the page's global lexical scope, where a site
+// script declaring the same name would throw a redeclaration SyntaxError.
+(function () {
+'use strict';
 
 window.VSC = window.VSC || {};
 
@@ -33,6 +39,32 @@ class BaseSiteHandler {
   }
 
   /**
+   * Declare site-specific intent-classifier rule activations.
+   *
+   * The classifier owns what each flag MEANS (signature rates, binding,
+   * terminal handling); handlers only declare WHICH flags their site
+   * activates, keeping hostname knowledge in one registry (matches()).
+   * Return a frozen partial override of IntentClassifier.TARGET_RULES, or
+   * null for the generic rules. Every activation must cite the issue that
+   * motivated it (see CONTRIBUTING's classifier-heuristic rule).
+   * @returns {Object|null} Partial rule flags, or null for generic rules
+   */
+  getClassifierRules() {
+    return null;
+  }
+
+  /**
+   * Handle site-specific speed change.
+   * Called whenever the extension sets playback speed (user action, fight-back, etc.).
+   * Override to sync with a site's custom player API.
+   * @param {HTMLMediaElement} video - Video element
+   * @param {number} speed - Target speed
+   */
+  handleSpeedChange(video, speed) {
+    video.playbackRate = speed;
+  }
+
+  /**
    * Handle site-specific seeking functionality
    * @param {HTMLMediaElement} video - Video element
    * @param {number} seekSeconds - Seconds to seek
@@ -48,21 +80,6 @@ class BaseSiteHandler {
       video.currentTime += seekSeconds;
     }
     return true;
-  }
-
-  /**
-   * Apply a speed change to the video. Default behaviour just writes
-   * playbackRate; site handlers can override to use a site-specific API
-   * (Netflix postMessage, Prime Video custom event, etc.).
-   *
-   * Matches upstream 0.10.2's bare assignment contract — no return value,
-   * no try/catch. If a site has a write-protected playbackRate (rare),
-   * the TypeError propagates up to the caller (action-handler.js).
-   * @param {HTMLMediaElement} video
-   * @param {number} speed
-   */
-  handleSpeedChange(video, speed) {
-    video.playbackRate = speed;
   }
 
   /**
@@ -90,6 +107,20 @@ class BaseSiteHandler {
   }
 
   /**
+   * Resolve a page gesture to exactly one controlled media element.
+   *
+   * Return null unless a site-specific player relationship is unambiguous.
+   * EventManager retains unresolved gestures as document-level fallback
+   * evidence, while a resolved gesture must never bless another player.
+   * @param {Event} _event
+   * @param {HTMLMediaElement[]} _mediaElements
+   * @returns {HTMLMediaElement|null}
+   */
+  resolveGestureMedia(_event, _mediaElements) {
+    return null;
+  }
+
+  /**
    * Get site-specific CSS selectors for video containers
    * @returns {Array<string>} CSS selectors
    */
@@ -109,3 +140,5 @@ class BaseSiteHandler {
 
 // Create singleton instance
 window.VSC.BaseSiteHandler = BaseSiteHandler;
+
+})();

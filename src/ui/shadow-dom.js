@@ -98,7 +98,8 @@ class ShadowDOMManager {
         'background: black !important; color: white !important;' +
         'border-radius: 6px !important; padding: 4px !important;' +
         'margin: 10px 10px 10px 15px !important;' +
-        'cursor: -webkit-grab !important; cursor: grab !important;' +
+        // Only the speed badge is a drag handle (upstream 0.11).
+        'cursor: default !important;' +
         'z-index: 9999999 !important;' +
         'white-space: nowrap !important;' +
         'width: auto !important; max-width: none !important;' +
@@ -123,19 +124,22 @@ class ShadowDOMManager {
         'flex-direction: row !important;' +
         'align-items: center !important;' +
       '}' +
+      // Unprefixed grab/grabbing follow each -webkit- value: Goanna may not
+      // accept the WebKit keywords, and the last valid declaration wins.
       '.vsc-controller .vsc-controller-inner .vsc-ctrl.dragging {' +
-        'cursor: -webkit-grabbing !important; opacity: 0.7;' +
+        'cursor: -webkit-grabbing !important; cursor: grabbing !important; opacity: 0.7;' +
       '}' +
       '.vsc-controller .vsc-controller-inner .vsc-draggable {' +
         'display: inline-flex !important;' +
         'flex-direction: row !important;' +
         'align-items: center !important; justify-content: center !important;' +
-        'cursor: -webkit-grab !important;' +
+        'cursor: -webkit-grab !important; cursor: grab !important;' +
         'max-width: none !important;' +
         'text-align: center !important; vertical-align: middle !important;' +
+        'touch-action: none !important;' +
       '}' +
       '.vsc-controller .vsc-controller-inner .vsc-draggable:active {' +
-        'cursor: -webkit-grabbing !important;' +
+        'cursor: -webkit-grabbing !important; cursor: grabbing !important;' +
       '}' +
       '.vsc-controller .vsc-controller-inner .vsc-btn {' +
         'display: inline-block !important;' +

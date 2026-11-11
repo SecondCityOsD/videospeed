@@ -1,55 +1,86 @@
 /**
- * Drag functionality for video controller — UXP version (plain DOM)
- * Modular architecture using global variables
+ * Drag functionality for video controller
+ * Uses pointer events for unified mouse + touch support
  */
+
+// UXP: the fork loads every module as its own classic <script> in page scope;
+// upstream gets one esbuild IIFE around the whole bundle. This wrapper keeps
+// top-level bindings out of the page's global lexical scope, where a site
+// script declaring the same name would throw a redeclaration SyntaxError.
+(function () {
+'use strict';
 
 window.VSC = window.VSC || {};
 
 class DragHandler {
   /**
-   * Handle dragging of video controller.
+   * Handle dragging of video controller via pointer events
    * @param {HTMLVideoElement} video - Video element
-   * @param {MouseEvent} e - Mouse event
+   * @param {PointerEvent|MouseEvent} e - Pointer/mouse event
    */
   static handleDrag(video, e) {
-    var controller = video.vsc.div;
-    // Plain DOM: .vsc-ctrl is inside .vsc-controller-inner inside wrapper
-    var innerCtrl = controller.querySelector('.vsc-ctrl');
-    var doc = controller.ownerDocument;
+    const controller = video.vsc.div;
+    // UXP: plain-DOM controller — getRoot() stands in for shadowRoot.
+    const shadowController = window.VSC.ShadowDOMManager.getController(
+      window.VSC.ShadowDOMManager.getRoot(controller)
+    );
+    const doc = controller.ownerDocument;
 
     video.classList.add('vcs-dragging');
-    innerCtrl.classList.add('dragging');
+    shadowController.classList.add('dragging');
 
-    var initialMouseXY = [e.clientX, e.clientY];
-    var initialControllerXY = [
-      parseInt(innerCtrl.style.left) || 0,
-      parseInt(innerCtrl.style.top) || 0
+    const initialXY = [e.clientX, e.clientY];
+    const initialControllerXY = [
+      parseInt(shadowController.style.left) || 0,
+      parseInt(shadowController.style.top) || 0,
     ];
 
-    // Document-level listeners (capture phase) so the drag keeps working
-    // when the cursor leaves the video container or moves over iframes.
-    // No mouseleave handler — only mouseup ends the drag.
-    var onMove = function(ev) {
-      var dx = ev.clientX - initialMouseXY[0];
-      var dy = ev.clientY - initialMouseXY[1];
-      innerCtrl.style.left = (initialControllerXY[0] + dx) + 'px';
-      innerCtrl.style.top = (initialControllerXY[1] + dy) + 'px';
-      ev.preventDefault();
+    const draggable = e.target;
+
+    // Capture pointer so all move/up events route here regardless of position
+    if (e.pointerId !== undefined) {
+      draggable.setPointerCapture(e.pointerId);
+    }
+
+    const onMove = (ev) => {
+      const dx = ev.clientX - initialXY[0];
+      const dy = ev.clientY - initialXY[1];
+      shadowController.style.left = `${initialControllerXY[0] + dx}px`;
+      shadowController.style.top = `${initialControllerXY[1] + dy}px`;
     };
 
-    var onEnd = function() {
+    const onEnd = () => {
+      draggable.removeEventListener('pointermove', onMove);
+      draggable.removeEventListener('pointerup', onEnd);
+      draggable.removeEventListener('pointercancel', onEnd);
+      // Mouse fallbacks (UXP: on the document — see below)
       doc.removeEventListener('mousemove', onMove, true);
       doc.removeEventListener('mouseup', onEnd, true);
-      innerCtrl.classList.remove('dragging');
+
+      shadowController.classList.remove('dragging');
       video.classList.remove('vcs-dragging');
+
       window.VSC.logger.debug('Drag operation completed');
     };
 
-    doc.addEventListener('mousemove', onMove, true);
-    doc.addEventListener('mouseup', onEnd, true);
+    if (e.pointerId !== undefined) {
+      draggable.addEventListener('pointermove', onMove);
+      draggable.addEventListener('pointerup', onEnd);
+      draggable.addEventListener('pointercancel', onEnd);
+    } else {
+      // UXP: the normal path — controls.js starts drags from mousedown.
+      // Mouse events have no setPointerCapture equivalent, so listen on the
+      // document in the capture phase: the drag keeps tracking when the
+      // cursor outruns the small badge, and a mouseup anywhere ends it.
+      doc.addEventListener('mousemove', onMove, true);
+      doc.addEventListener('mouseup', onEnd, true);
+    }
 
     window.VSC.logger.debug('Drag operation started');
   }
 }
 
+// Create singleton instance
 window.VSC.DragHandler = DragHandler;
+
+})();

@@ -1,17 +1,27 @@
 /**
  * YouTube-specific handler
- * Modular architecture using global variables
  */
+
+// UXP: the fork loads every module as its own classic <script> in page scope;
+// upstream gets one esbuild IIFE around the whole bundle. This wrapper keeps
+// top-level bindings out of the page's global lexical scope, where a site
+// script declaring the same name would throw a redeclaration SyntaxError.
+(function () {
+'use strict';
 
 window.VSC = window.VSC || {};
 
 class YouTubeHandler extends window.VSC.BaseSiteHandler {
   /**
    * Check if this handler applies to YouTube
+   * @param {string} [hostname] - Injectable for tests; defaults to live location
    * @returns {boolean} True if on YouTube
    */
-  static matches() {
-    return location.hostname === 'www.youtube.com';
+  static matches(hostname = location.hostname) {
+    // youtube-nocookie.com is the privacy-enhanced embed host: identical
+    // player build, DOM, and control layers. music.youtube.com stays
+    // excluded — different player shell.
+    return hostname === 'www.youtube.com' || hostname === 'www.youtube-nocookie.com';
   }
 
   /**
@@ -25,15 +35,39 @@ class YouTubeHandler extends window.VSC.BaseSiteHandler {
     // Default: insert into the .html5-video-player (one level up from video container).
     let targetParent = parent.parentElement;
 
-    // Embedded YouTube has a #player-controls overlay that sits as a sibling of
-    // .html5-video-player and creates a separate stacking context, intercepting
-    // all pointer events. Our controller inside .html5-video-player can't
-    // z-index above it. Fix: insert into #player (the common parent) so our
-    // controller participates in the same stacking context as the overlay.
-    // NOTE: scope the query to targetParent.parentElement so we don't falsely
-    // match a global #player-controls element on the desktop site (which would
-    // promote insertion into the tightly-managed ytd-player > div#container
-    // and crash Polymer).
+    // 2026 embed layout: YouTube moved the #player-controls overlay out of
+    // #player to a position:fixed <body> child (ytm-* control host). Nothing
+    // inserted inside #player can stack above it — #movie_player is a
+    // z-index:0 stacking context painted before that fixed sibling — so the
+    // controller must anchor at body level, where its own z-index competes in
+    // the root stacking context. This also removes #movie_player from the
+    // host's ancestry, so the light-DOM .ytp-autohide descendant rule stops
+    // matching. This matters because the ytm UI sets that class once and never
+    // toggles it.
+    // Trade-off: while the player element itself is fullscreened, a
+    // body-level controller does not render; keyboard shortcuts still work.
+    // Scoped to /embed/ so a desktop page's global #player-controls can never
+    // re-trigger the historical Polymer-crash insertion.
+    if (
+      location.pathname.startsWith('/embed/') &&
+      document.body && document.body.querySelector(':scope > #player-controls')
+    ) {
+      return {
+        insertionPoint: document.body,
+        insertionMethod: 'firstChild',
+        targetParent: document.body,
+      };
+    }
+
+    // Older embed layout: #player-controls overlay sits as a sibling of
+    // .html5-video-player inside #player and creates a separate stacking
+    // context, intercepting all pointer events. Our controller inside
+    // .html5-video-player can't z-index above it. Fix: insert into #player
+    // (the common parent) so our controller participates in the same stacking
+    // context as the overlay.
+    // NOTE: Must scope the query to targetParent.parentElement to avoid falsely matching
+    // a global #player-controls element on the desktop site, which promotes insertion
+    // into the tightly-managed ytd-player > div#container and crashes Polymer.
     if (
       targetParent &&
       targetParent.parentElement &&
@@ -49,26 +83,77 @@ class YouTubeHandler extends window.VSC.BaseSiteHandler {
     };
   }
 
-  /**
-   * Initialize YouTube-specific functionality
-   * @param {Document} document - Document object
-   */
-  initialize(document) {
-    super.initialize(document);
+  // YouTube autohide is handled by domain-scoped light-DOM CSS in
+  // controller-css-defaults.js. The descendant selector reacts to YouTube's
+  // page-owned class without forwarding state through a MutationObserver.
 
-    // Set up YouTube-specific CSS handling
-    this.setupYouTubeCSS();
+  /**
+   * Press-and-hold 2x boost (#1554/#1568): the pointer variant fires a
+   * ratechange while the pointer is still down, before any click event
+   * exists (PR #1555). The SPACEBAR variant of the same boost armed via
+   * legacy any-key-arming — narrowed away by TARGET_RULES — so Space must
+   * arm here explicitly (held Space auto-repeats keydown, keeping the
+   * gesture window fresh through the hold and across the release reset).
+   * Scoped to this handler's matches() hosts: www.youtube.com and the
+   * privacy-enhanced embed host, which serve the identical player.
+   * (#1581 needs no entry: click-seek resets go to 1.0, and a 1.0 adoption
+   * requires STRONG evidence under the classifier's tiered rules.)
+   * @returns {Object} Classifier rule activations for YouTube
+   */
+  getClassifierRules() {
+    return YouTubeHandler.CLASSIFIER_RULES;
   }
 
   /**
-   * Set up YouTube-specific CSS classes and positioning
+   * Associate a gesture in YouTube player chrome with exactly one controlled
+   * video. Player controls are overlays/siblings rather than video children,
+   * so EventManager's direct composed-path resolution cannot see them.
+   *
+   * This deliberately recognizes the whole player chrome, including seek
+   * controls: it only prevents a click for player A from blessing player B;
+   * it does not claim to distinguish a seek from a native speed-menu action.
+   * @param {Event} event
+   * @param {HTMLMediaElement[]} mediaElements
+   * @returns {HTMLMediaElement|null}
+   */
+  resolveGestureMedia(event, mediaElements) {
+    const path = typeof event.composedPath === 'function' ? event.composedPath() : [event.target];
+    const matches = mediaElements.filter((video) => this.gestureBelongsToVideo(path, video));
+    return matches.length === 1 ? matches[0] : null;
+  }
+
+  /**
+   * @param {EventTarget[]} path
+   * @param {HTMLMediaElement} video
+   * @returns {boolean}
    * @private
    */
-  setupYouTubeCSS() {
-    // YouTube has complex CSS that can hide our controller. The site-specific
-    // rules in styles/controller-css-defaults.js already handle this; dynamic
-    // adjustments could be added here if needed.
-    window.VSC.logger.debug('YouTube CSS setup completed');
+  gestureBelongsToVideo(path, video) {
+    const closest = (selector) =>
+      typeof video.closest === 'function' ? video.closest(selector) : undefined;
+    const player =
+      closest('.html5-video-player') || closest('#movie_player') || closest('.ytp-player-content');
+    if (!player) {
+      return false;
+    }
+
+    const includes = (container) =>
+      !!container &&
+      path.some(
+        (node) => node === container || (node != null && node.nodeType && container.contains(node))
+      );
+    if (includes(player)) {
+      return true;
+    }
+
+    // Embedded players place #player-controls alongside the player in the
+    // common parent stacking context. Scope it to that parent so a desktop
+    // page's unrelated global ID cannot claim this video.
+    const siblings = (player.parentElement && player.parentElement.children) || [];
+    const embeddedControls = Array.from(siblings).find(
+      (child) => child.id === 'player-controls'
+    );
+    return includes(embeddedControls);
   }
 
   /**
@@ -80,8 +165,7 @@ class YouTubeHandler extends window.VSC.BaseSiteHandler {
     // Ignore thumbnail videos and ads
     return (
       video.classList.contains('video-thumbnail') ||
-      (video.parentElement &&
-        video.parentElement.classList.contains('ytp-ad-player-overlay'))
+      (video.parentElement && video.parentElement.classList.contains('ytp-ad-player-overlay'))
     );
   }
 
@@ -111,7 +195,7 @@ class YouTubeHandler extends window.VSC.BaseSiteHandler {
             const iframeVideos = iframeDoc.querySelectorAll('video');
             videos.push(...Array.from(iframeVideos));
           }
-        } catch (e) {
+        } catch (err) {
           // Cross-origin iframe, ignore
         }
       });
@@ -121,17 +205,11 @@ class YouTubeHandler extends window.VSC.BaseSiteHandler {
 
     return videos;
   }
-
-  /**
-   * Handle YouTube-specific player state changes
-   * @param {HTMLMediaElement} video - Video element
-   */
-  onPlayerStateChange(_video) {
-    // YouTube fires custom events we could listen to
-    // This could be used for better integration with YouTube's player
-    window.VSC.logger.debug('YouTube player state changed');
-  }
 }
+
+YouTubeHandler.CLASSIFIER_RULES = Object.freeze({ pointerHoldArms: true, spacebarArms: true });
 
 // Create singleton instance
 window.VSC.YouTubeHandler = YouTubeHandler;
+
+})();

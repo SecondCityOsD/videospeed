@@ -1,7 +1,13 @@
 /**
  * Apple TV+ handler
- * Modular architecture using global variables
  */
+
+// UXP: the fork loads every module as its own classic <script> in page scope;
+// upstream gets one esbuild IIFE around the whole bundle. This wrapper keeps
+// top-level bindings out of the page's global lexical scope, where a site
+// script declaring the same name would throw a redeclaration SyntaxError.
+(function () {
+'use strict';
 
 window.VSC = window.VSC || {};
 
@@ -55,3 +61,5 @@ class AppleHandler extends window.VSC.BaseSiteHandler {
 
 // Create singleton instance
 window.VSC.AppleHandler = AppleHandler;
+
+})();

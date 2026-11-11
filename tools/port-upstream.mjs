@@ -1041,7 +1041,10 @@ window.VSC.VideoController = VideoController;`,
     }
     if (this._customSheet) {
       this._customSheet.remove();
-    }`,
+    }
+    // UXP: also the shared stylesheet ShadowDOMManager adds in place of
+    // per-controller shadow styles (upstream's leave with each shadow root).
+    window.VSC.ShadowDOMManager.removeCSS(document);`,
       ],
       [
         `(function () {
@@ -1177,6 +1180,199 @@ window.VSC.VideoController = VideoController;`,
     window.VSC.logger.error(\`Extension initialization failed: \${error.message}\`);
   });
 })();`,
+      ],
+    ],
+  },
+
+  // --- Site handlers ---------------------------------------------------------
+  'site-handlers/base-handler.js': { edits: [] },
+  'site-handlers/amazon-handler.js': { edits: [] },
+  'site-handlers/apple-handler.js': { edits: [] },
+  'site-handlers/dailymotion-handler.js': { edits: [] },
+  'site-handlers/facebook-handler.js': { edits: [] },
+  'site-handlers/frame-handler.js': { edits: [] },
+  // Upstream's eager handler list: overlay.js loads every handler first.
+  'site-handlers/index.js': { edits: [] },
+  // Netflix seeks through this page-world bridge, exactly as upstream bundles
+  // it into its inject script (the 0.10.2-era fork never loaded it).
+  'site-handlers/scripts/netflix.js': { anchor: 'window.addEventListener(', edits: [] },
+
+  'site-handlers/netflix-handler.js': {
+    edits: [
+      [
+        "      video.parentElement?.classList.contains('billboard-row')",
+        "      (video.parentElement && video.parentElement.classList.contains('billboard-row'))",
+      ],
+    ],
+  },
+
+  'site-handlers/youtube-handler.js': {
+    edits: [
+      [
+        "      document.body?.querySelector(':scope > #player-controls')",
+        "      document.body && document.body.querySelector(':scope > #player-controls')",
+      ],
+      [
+        `    const player =
+      video.closest?.('.html5-video-player') ||
+      video.closest?.('#movie_player') ||
+      video.closest?.('.ytp-player-content');`,
+        `    const closest = (selector) =>
+      typeof video.closest === 'function' ? video.closest(selector) : undefined;
+    const player =
+      closest('.html5-video-player') || closest('#movie_player') || closest('.ytp-player-content');`,
+      ],
+      [
+        '      path.some((node) => node === container || (node?.nodeType && container.contains(node)));',
+        `      path.some(
+        (node) => node === container || (node != null && node.nodeType && container.contains(node))
+      );`,
+      ],
+      [
+        '    const embeddedControls = Array.from(player.parentElement?.children || []).find(',
+        `    const siblings = (player.parentElement && player.parentElement.children) || [];
+    const embeddedControls = Array.from(siblings).find(`,
+      ],
+      [
+        "      video.parentElement?.classList.contains('ytp-ad-player-overlay')",
+        "      (video.parentElement && video.parentElement.classList.contains('ytp-ad-player-overlay'))",
+      ],
+      [
+        `        } catch {
+          // Cross-origin iframe, ignore`,
+        `        } catch (err) {
+          // Cross-origin iframe, ignore`,
+      ],
+    ],
+  },
+
+  // --- Controller UI ---------------------------------------------------------
+  'ui/controls.js': {
+    edits: [
+      [
+        "    const draggable = shadow.querySelector('.draggable');",
+        `    // UXP: the fork's plain-DOM element names live behind ShadowDOMManager.
+    const draggable = window.VSC.ShadowDOMManager.getSpeedIndicator(shadow);`,
+      ],
+      [
+        `    // Pointer-based drag (unified mouse + touch)
+    draggable.addEventListener(
+      'pointerdown',`,
+        `    // UXP: mousedown, not pointerdown — Goanna builds may ship without pointer
+    // events, so a pointerdown listener might never fire. DragHandler then
+    // tracks the mouse drag on the document (see drag-handler.js).
+    draggable.addEventListener(
+      'mousedown',`,
+      ],
+      [
+        `  setupWheelHandler(shadow, video) {
+    const controller = shadow.querySelector('#controller');`,
+        `  setupWheelHandler(shadow, video) {
+    const controller = window.VSC.ShadowDOMManager.getController(shadow);`,
+      ],
+      [
+        `  setupClickPrevention(shadow) {
+    const controller = shadow.querySelector('#controller');`,
+        `  setupClickPrevention(shadow) {
+    const controller = window.VSC.ShadowDOMManager.getController(shadow);`,
+      ],
+    ],
+  },
+
+  'ui/drag-handler.js': {
+    edits: [
+      [
+        "    const shadowController = controller.shadowRoot.querySelector('#controller');",
+        `    // UXP: plain-DOM controller — getRoot() stands in for shadowRoot.
+    const shadowController = window.VSC.ShadowDOMManager.getController(
+      window.VSC.ShadowDOMManager.getRoot(controller)
+    );
+    const doc = controller.ownerDocument;`,
+      ],
+      [
+        `      // Mouse fallbacks
+      draggable.removeEventListener('mousemove', onMove);
+      draggable.removeEventListener('mouseup', onEnd);`,
+        `      // Mouse fallbacks (UXP: on the document — see below)
+      doc.removeEventListener('mousemove', onMove, true);
+      doc.removeEventListener('mouseup', onEnd, true);`,
+      ],
+      [
+        `      // Fallback for environments without pointer events
+      draggable.addEventListener('mousemove', onMove);
+      draggable.addEventListener('mouseup', onEnd);`,
+        `      // UXP: the normal path — controls.js starts drags from mousedown.
+      // Mouse events have no setPointerCapture equivalent, so listen on the
+      // document in the capture phase: the drag keeps tracking when the
+      // cursor outruns the small badge, and a mouseup anywhere ends it.
+      doc.addEventListener('mousemove', onMove, true);
+      doc.addEventListener('mouseup', onEnd, true);`,
+      ],
+    ],
+  },
+
+  // --- Observers and utilities -----------------------------------------------
+  'observers/media-observer.js': { edits: [] },
+
+  'observers/mutation-observer.js': {
+    edits: [
+      [
+        '    this.shadowObservers = new Set();',
+        `    // UXP: Map shadowRoot -> MutationObserver so stop() can disconnect them
+    // (upstream keeps only the roots, leaving their observers running after
+    // teardown).
+    this.shadowObservers = new Map();`,
+      ],
+      [
+        '    if (!added && document.body?.contains(node)) {',
+        '    if (!added && document.body && document.body.contains(node)) {',
+      ],
+      [
+        '    this.shadowObservers.add(shadowRoot);',
+        '    this.shadowObservers.set(shadowRoot, shadowObserver);',
+      ],
+      [
+        `    // Clean up shadow observers
+    this.shadowObservers.forEach((_shadowRoot) => {
+      // Note: We can't access the observer directly, but disconnecting the main
+      // observer should handle most cases. Shadow observers will be garbage collected.
+    });`,
+        `    // Clean up shadow observers. UXP: disconnect each one — an observer on a
+    // live shadow root is not collected while that root exists.
+    this.shadowObservers.forEach((observer) => {
+      observer.disconnect();
+    });`,
+      ],
+    ],
+  },
+
+  'utils/dom-utils.js': {
+    edits: [['  } catch {', '  } catch (e) {']],
+  },
+
+  'utils/debug-helper.js': {
+    edits: [
+      [
+        '      if (window.VSC.MediaElementObserver && window.VSC_controller?.mediaObserver) {',
+        `      if (
+        window.VSC.MediaElementObserver &&
+        window.VSC_controller &&
+        window.VSC_controller.mediaObserver
+      ) {`,
+      ],
+      [
+        "      const innerController = controller.shadowRoot?.querySelector('#controller');",
+        `      // UXP: plain-DOM controller — getRoot() stands in for shadowRoot.
+      const root = window.VSC.ShadowDOMManager.getRoot(controller);
+      const innerController = root ? window.VSC.ShadowDOMManager.getController(root) : null;`,
+      ],
+      [
+        `        // Dispatch the same event that content script would dispatch
+        window.dispatchEvent(`,
+        `        // Dispatch the same event that content script would dispatch.
+        // UXP: on documentElement, where inject.js listens — upstream
+        // dispatches on window, which that listener never sees.
+        document.documentElement.dispatchEvent(`,
       ],
     ],
   },

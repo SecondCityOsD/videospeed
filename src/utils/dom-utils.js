@@ -1,63 +1,16 @@
 /**
  * DOM utility functions for Video Speed Controller
- * Modular architecture using global variables
  */
+
+// UXP: the fork loads every module as its own classic <script> in page scope;
+// upstream gets one esbuild IIFE around the whole bundle. This wrapper keeps
+// top-level bindings out of the page's global lexical scope, where a site
+// script declaring the same name would throw a redeclaration SyntaxError.
+(function () {
+'use strict';
 
 window.VSC = window.VSC || {};
 window.VSC.DomUtils = {};
-
-/**
- * Escape string for use in regular expressions
- * @param {string} str - String to escape
- * @returns {string} Escaped string
- */
-window.VSC.DomUtils.escapeStringRegExp = function (str) {
-  const matchOperatorsRe = /[|\\{}()[\]^$+*?.]/g;
-  return str.replace(matchOperatorsRe, '\\$&');
-};
-
-/**
- * Check if current page is blacklisted
- * @param {string} blacklist - Blacklist string from settings
- * @returns {boolean} True if page is blacklisted
- */
-window.VSC.DomUtils.isBlacklisted = function (blacklist) {
-  let blacklisted = false;
-
-  blacklist.split('\n').forEach((match) => {
-    match = match.replace(window.VSC.Constants.regStrip, '');
-    if (match.length === 0) {
-      return;
-    }
-
-    let regexp;
-    if (match.startsWith('/')) {
-      try {
-        const parts = match.split('/');
-
-        if (window.VSC.Constants.regEndsWithFlags.test(match)) {
-          const flags = parts.pop();
-          const regex = parts.slice(1).join('/');
-          regexp = new RegExp(regex, flags);
-        } else {
-          const flags = '';
-          const regex = match;
-          regexp = new RegExp(regex, flags);
-        }
-      } catch (err) {
-        return;
-      }
-    } else {
-      regexp = new RegExp(window.VSC.DomUtils.escapeStringRegExp(match));
-    }
-
-    if (regexp.test(location.href)) {
-      blacklisted = true;
-    }
-  });
-
-  return blacklisted;
-};
 
 /**
  * Check if we're running in an iframe
@@ -95,11 +48,9 @@ window.VSC.DomUtils.getShadow = function (parent, maxDepth = 10) {
         result.push(child);
         getChild(child, depth + 1);
 
-        // Only traverse shadow roots if we haven't exceeded depth limit.
-        // Always synchronous — callers consume the return value immediately;
-        // the previous `setTimeout` branch for depth>5 created a silent race
-        // where deeply-nested shadow elements were missed.
+        // Only traverse shadow roots if we haven't exceeded depth limit
         if (child.shadowRoot && depth < maxDepth - 2) {
+          // Always handle shadow roots synchronously to maintain function contract
           result.push(...window.VSC.DomUtils.getShadow(child.shadowRoot, maxDepth - depth));
         }
 
@@ -139,12 +90,10 @@ window.VSC.DomUtils.findVideoParent = function (element) {
 window.VSC.DomUtils.initializeWhenReady = function (document, callback) {
   window.VSC.logger.debug('Begin initializeWhenReady');
 
-  // Use addEventListener instead of property assignment so we don't clobber
-  // any handlers the page (or another extension) has registered. `{ once: true }`
-  // takes care of cleanup automatically.
   const handleWindowLoad = () => {
     callback(window.document);
   };
+
   window.addEventListener('load', handleWindowLoad, { once: true });
 
   if (document) {
@@ -230,3 +179,5 @@ window.VSC.DomUtils.findShadowMedia = function (root, selector) {
 };
 
 // Global variables available for both browser and testing
+
+})();

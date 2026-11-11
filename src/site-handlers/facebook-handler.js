@@ -1,7 +1,13 @@
 /**
  * Facebook-specific handler
- * Modular architecture using global variables
  */
+
+// UXP: the fork loads every module as its own classic <script> in page scope;
+// upstream gets one esbuild IIFE around the whole bundle. This wrapper keeps
+// top-level bindings out of the page's global lexical scope, where a site
+// script declaring the same name would throw a redeclaration SyntaxError.
+(function () {
+'use strict';
 
 window.VSC = window.VSC || {};
 
@@ -21,17 +27,20 @@ class FacebookHandler extends window.VSC.BaseSiteHandler {
    * @returns {Object} Positioning information
    */
   getControllerPosition(parent, _video) {
-    // Facebook requires deep DOM traversal due to complex nesting
-    // This is a monstrosity but new FB design does not have semantic handles
+    // Facebook's feed needs a seven-level promotion but exposes no stable
+    // semantic handle. Plugin players have a shallower tree, so preserve the
+    // known feed target only when every ancestor exists; otherwise use the
+    // same nearby fallback as other unknown Facebook layouts.
+    const fallbackParent = parent.parentElement || parent;
     let targetParent = parent;
 
-    try {
-      targetParent =
-        parent.parentElement.parentElement.parentElement.parentElement.parentElement.parentElement
-          .parentElement;
-    } catch (e) {
-      window.VSC.logger.warn('Facebook DOM structure changed, using fallback positioning');
-      targetParent = parent.parentElement;
+    for (let depth = 0; depth < 7; depth += 1) {
+      if (!targetParent.parentElement) {
+        window.VSC.logger.warn('Facebook DOM structure changed, using fallback positioning');
+        targetParent = fallbackParent;
+        break;
+      }
+      targetParent = targetParent.parentElement;
     }
 
     return {
@@ -133,3 +142,5 @@ class FacebookHandler extends window.VSC.BaseSiteHandler {
 
 // Create singleton instance
 window.VSC.FacebookHandler = FacebookHandler;
+
+})();

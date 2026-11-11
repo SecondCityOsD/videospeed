@@ -1,19 +1,26 @@
 /**
  * DOM mutation observer for detecting video elements
- * Modular architecture using global variables
  */
+
+// UXP: the fork loads every module as its own classic <script> in page scope;
+// upstream gets one esbuild IIFE around the whole bundle. This wrapper keeps
+// top-level bindings out of the page's global lexical scope, where a site
+// script declaring the same name would throw a redeclaration SyntaxError.
+(function () {
+'use strict';
 
 window.VSC = window.VSC || {};
 
 class VideoMutationObserver {
-  constructor(config, onVideoFound, onVideoRemoved, mediaObserver, onReinit) {
+  constructor(config, onVideoFound, onVideoRemoved, mediaObserver) {
     this.config = config;
     this.onVideoFound = onVideoFound;
     this.onVideoRemoved = onVideoRemoved;
     this.mediaObserver = mediaObserver;
-    this.onReinit = onReinit || null;
     this.observer = null;
-    // Map shadowRoot -> MutationObserver so we can disconnect them in stop().
+    // UXP: Map shadowRoot -> MutationObserver so stop() can disconnect them
+    // (upstream keeps only the roots, leaving their observers running after
+    // teardown).
     this.shadowObservers = new Map();
   }
 
@@ -23,8 +30,9 @@ class VideoMutationObserver {
    */
   start(document) {
     this.observer = new MutationObserver((mutations) => {
-      // Let the browser pick when to run; upstream dropped the explicit
-      // timeout to avoid competing with page init on async-heavy sites.
+      // Process mutations when the browser is genuinely idle — no forced timeout.
+      // Sites do async post-load init that's sensitive to DOM insertions; a
+      // forced timeout can fire during that window.
       requestIdleCallback(() => {
         this.processMutations(mutations);
       });
@@ -200,9 +208,10 @@ class VideoMutationObserver {
       if (added) {
         this.onVideoFound(node, parent);
       } else {
-        if (node.vsc) {
-          this.onVideoRemoved(node);
-        }
+        // Removal also retires a deferred loadeddata listener for media that
+        // was discovered before it was ready, so this callback must run even
+        // before a VideoController has been attached.
+        this.onVideoRemoved(node);
       }
     } else {
       this.processNodeChildren(node, parent, added);
@@ -227,7 +236,7 @@ class VideoMutationObserver {
 
     // Handle regular children
     if (node.children) {
-      children = [...children, ...node.children];
+      children = [...children, ...Array.from(node.children)];
     }
 
     // Process all children
@@ -247,9 +256,12 @@ class VideoMutationObserver {
     }
 
     const shadowObserver = new MutationObserver((mutations) => {
-      requestIdleCallback(() => {
-        this.processMutations(mutations);
-      });
+      requestIdleCallback(
+        () => {
+          this.processMutations(mutations);
+        },
+        { timeout: 500 }
+      );
     });
 
     const observerOptions = {
@@ -265,19 +277,12 @@ class VideoMutationObserver {
   }
 
   /**
-   * Handle document replacement (document.write on e.g. watch.sling.com).
-   * Trigger a real teardown + reinit through the callback owned by inject.js.
+   * Handle document replacement
    * @private
    */
   onDocumentReplaced() {
-    window.VSC.logger.warn('Document replacement detected — tearing down and reinitializing');
-    if (typeof this.onReinit === 'function') {
-      try {
-        this.onReinit();
-      } catch (e) {
-        window.VSC.logger.error(`Reinit handler failed: ${e.message}`);
-      }
-    }
+    // This callback should trigger reinitialization
+    window.VSC.logger.warn('Document replacement detected - full reinitialization needed');
   }
 
   /**
@@ -289,13 +294,10 @@ class VideoMutationObserver {
       this.observer = null;
     }
 
-    // Disconnect every shadow-root observer we created.
+    // Clean up shadow observers. UXP: disconnect each one — an observer on a
+    // live shadow root is not collected while that root exists.
     this.shadowObservers.forEach((observer) => {
-      try {
-        observer.disconnect();
-      } catch (e) {
-        // ShadowRoot may already be gone — ignore.
-      }
+      observer.disconnect();
     });
     this.shadowObservers.clear();
 
@@ -305,3 +307,5 @@ class VideoMutationObserver {
 
 // Create singleton instance
 window.VSC.VideoMutationObserver = VideoMutationObserver;
+
+})();

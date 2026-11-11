@@ -3,6 +3,13 @@
  * Add this to help troubleshoot controller visibility and popup communication
  */
 
+// UXP: the fork loads every module as its own classic <script> in page scope;
+// upstream gets one esbuild IIFE around the whole bundle. This wrapper keeps
+// top-level bindings out of the page's global lexical scope, where a site
+// script declaring the same name would throw a redeclaration SyntaxError.
+(function () {
+'use strict';
+
 window.VSC = window.VSC || {};
 
 class DebugHelper {
@@ -81,7 +88,11 @@ class DebugHelper {
       });
 
       // Check if would be detected by VSC
-      if (window.VSC.MediaElementObserver && window.VSC_controller && window.VSC_controller.mediaObserver) {
+      if (
+        window.VSC.MediaElementObserver &&
+        window.VSC_controller &&
+        window.VSC_controller.mediaObserver
+      ) {
         const observer = window.VSC_controller.mediaObserver;
         console.log('VSC would detect:', observer.isValidMediaElement(media));
         console.log('VSC would start hidden:', observer.shouldStartHidden(media));
@@ -130,7 +141,7 @@ class DebugHelper {
   checkControllers() {
     console.group('🎮 Controllers Analysis');
 
-    const controllers = document.querySelectorAll('.vsc-controller');
+    const controllers = document.querySelectorAll('vsc-controller');
     console.log(`Found ${controllers.length} VSC controllers`);
 
     controllers.forEach((controller, index) => {
@@ -138,27 +149,42 @@ class DebugHelper {
       console.log('Element:', controller);
       console.log('Classes:', controller.className);
 
-      const style = window.getComputedStyle(controller);
+      const hostStyle = window.getComputedStyle(controller);
+      // UXP: plain-DOM controller — getRoot() stands in for shadowRoot.
+      const root = window.VSC.ShadowDOMManager.getRoot(controller);
+      const innerController = root ? window.VSC.ShadowDOMManager.getController(root) : null;
+      const innerStyle = innerController ? window.getComputedStyle(innerController) : null;
       console.log('Computed styles:', {
-        display: style.display,
-        visibility: style.visibility,
-        opacity: style.opacity,
-        position: style.position,
-        top: style.top,
-        left: style.left,
-        zIndex: style.zIndex,
+        host: {
+          display: hostStyle.display,
+          visibility: hostStyle.visibility,
+          opacity: hostStyle.opacity,
+          position: hostStyle.position,
+          top: hostStyle.top,
+          left: hostStyle.left,
+          zIndex: hostStyle.zIndex,
+        },
+        inner: innerStyle
+          ? {
+              display: innerStyle.display,
+              visibility: innerStyle.visibility,
+              opacity: innerStyle.opacity,
+            }
+          : null,
       });
 
-      // Check if hidden by VSC classes
       const isHidden = controller.classList.contains('vsc-hidden');
-      const isManual = controller.classList.contains('vsc-manual');
       const hasNoSource = controller.classList.contains('vsc-nosource');
+      const isShow = controller.classList.contains('vsc-show');
+      const visibilityOverride = controller.dataset.vscVisibility || 'auto';
 
       console.log('VSC State:', {
         hidden: isHidden,
-        manual: isManual,
         noSource: hasNoSource,
-        effectivelyVisible: !isHidden && style.display !== 'none',
+        show: isShow,
+        visibilityOverride,
+        effectivelyVisible:
+          !!innerStyle && innerStyle.display !== 'none' && innerStyle.visibility !== 'hidden',
       });
 
       // Find associated video
@@ -222,9 +248,10 @@ class DebugHelper {
       videos.forEach((video, index) => {
         if (video.vsc) {
           console.log(`Applying speed ${testSpeed} to media #${index + 1} via action handler`);
-          window.VSC_controller.actionHandler.setSpeed(video, testSpeed);
+          window.VSC_controller.actionHandler.adjustSpeed(video, testSpeed);
         } else {
           console.log(`Applying speed ${testSpeed} to media #${index + 1} directly`);
+          // eslint-disable-next-line no-restricted-syntax -- diagnostic probe, intentionally raw
           video.playbackRate = testSpeed;
         }
       });
@@ -234,8 +261,9 @@ class DebugHelper {
         console.log('Resetting speed to 1.0x');
         videos.forEach((video) => {
           if (video.vsc) {
-            window.VSC_controller.actionHandler.setSpeed(video, 1.0);
+            window.VSC_controller.actionHandler.adjustSpeed(video, 1.0);
           } else {
+            // eslint-disable-next-line no-restricted-syntax -- diagnostic probe restore, intentionally raw
             video.playbackRate = 1.0;
           }
         });
@@ -266,11 +294,12 @@ class DebugHelper {
       setTimeout(() => {
         console.log(`🔧 Debug: Simulating popup message ${index + 1}:`, message);
 
-        // Dispatch on documentElement to match inject.js's listener.
+        // Dispatch the same event that content script would dispatch.
+        // UXP: on documentElement, where inject.js listens — upstream
+        // dispatches on window, which that listener never sees.
         document.documentElement.dispatchEvent(
           new CustomEvent('VSC_MESSAGE', {
             detail: message,
-            bubbles: true,
           })
         );
       }, index * 1500); // 1.5 second delays
@@ -286,16 +315,10 @@ class DebugHelper {
   forceShowControllers() {
     console.log('🔧 Force showing all controllers');
 
-    const controllers = document.querySelectorAll('.vsc-controller');
+    const controllers = document.querySelectorAll('vsc-controller');
     controllers.forEach((controller, index) => {
-      // Remove all hiding classes
-      controller.classList.remove('vsc-hidden', 'vsc-nosource');
-      controller.classList.add('vsc-manual', 'vsc-show');
-
-      // Force visibility styles
-      controller.style.display = 'block !important';
-      controller.style.visibility = 'visible !important';
-      controller.style.opacity = '1 !important';
+      controller.dataset.vscVisibility = 'show';
+      controller.classList.remove('vsc-nosource', 'vsc-show');
 
       console.log(`Controller #${index + 1} forced visible`);
     });
@@ -316,14 +339,8 @@ class DebugHelper {
       if (audio.vsc && audio.vsc.div) {
         const controller = audio.vsc.div;
 
-        // Remove all hiding classes
-        controller.classList.remove('vsc-hidden', 'vsc-nosource');
-        controller.classList.add('vsc-manual', 'vsc-show');
-
-        // Force visibility styles
-        controller.style.display = 'block !important';
-        controller.style.visibility = 'visible !important';
-        controller.style.opacity = '1 !important';
+        controller.dataset.vscVisibility = 'show';
+        controller.classList.remove('vsc-nosource', 'vsc-show');
 
         console.log(`Audio controller #${index + 1} forced visible`);
         controllersShown++;
@@ -369,15 +386,18 @@ class DebugHelper {
       mutations.forEach((mutation) => {
         if (
           mutation.type === 'attributes' &&
-          (mutation.attributeName === 'class' || mutation.attributeName === 'style')
+          (mutation.attributeName === 'class' ||
+            mutation.attributeName === 'style' ||
+            mutation.attributeName === 'data-vsc-visibility')
         ) {
           const target = mutation.target;
-          if (target.classList.contains('vsc-controller')) {
+          if (target.tagName === 'VSC-CONTROLLER') {
             console.log('🔄 Controller visibility changed:', {
               element: target,
               classes: target.className,
               hidden: target.classList.contains('vsc-hidden'),
-              manual: target.classList.contains('vsc-manual'),
+              visibilityOverride: target.dataset.vscVisibility || 'auto',
+              show: target.classList.contains('vsc-show'),
             });
           }
         }
@@ -387,7 +407,7 @@ class DebugHelper {
     observer.observe(document.body, {
       attributes: true,
       subtree: true,
-      attributeFilter: ['class', 'style'],
+      attributeFilter: ['class', 'style', 'data-vsc-visibility'],
     });
 
     return observer;
@@ -399,3 +419,5 @@ window.VSC.DebugHelper = DebugHelper;
 window.vscDebugHelper = new DebugHelper();
 
 // Debug mode can be enabled manually by calling: window.vscDebugHelper.enable()
+
+})();

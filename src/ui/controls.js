@@ -1,7 +1,13 @@
 /**
- * Control button interactions and event handling — UXP version (plain DOM)
- * Modular architecture using global variables
+ * Control button interactions and event handling
  */
+
+// UXP: the fork loads every module as its own classic <script> in page scope;
+// upstream gets one esbuild IIFE around the whole bundle. This wrapper keeps
+// top-level bindings out of the page's global lexical scope, where a site
+// script declaring the same name would throw a redeclaration SyntaxError.
+(function () {
+'use strict';
 
 window.VSC = window.VSC || {};
 
@@ -12,33 +18,46 @@ class ControlsManager {
   }
 
   /**
-   * Set up control button event listeners.
-   * @param {HTMLElement} container - The controller inner container
+   * Set up control button event listeners
+   * @param {ShadowRoot} shadow - Shadow root containing controls
    * @param {HTMLVideoElement} video - Associated video element
    */
-  setupControlEvents(container, video) {
-    this.setupDragHandler(container);
-    this.setupButtonHandlers(container);
-    this.setupWheelHandler(container, video);
-    this.setupDoubleClickReset(container);
-    this.setupClickPrevention(container);
+  setupControlEvents(shadow, video) {
+    this.setupDragHandler(shadow);
+    this.setupButtonHandlers(shadow);
+    this.setupWheelHandler(shadow, video);
+    this.setupClickPrevention(shadow);
   }
 
-  setupDragHandler(container) {
-    // Match the upstream behaviour: the whole controller body is a drag
-    // handle, not just the speed pill. Buttons keep their own handlers
-    // because the target check short-circuits before runAction('drag').
-    var ctrl = container.querySelector('.vsc-ctrl');
-    var self = this;
+  /**
+   * Set up drag and double-click-to-reset handlers for speed indicator
+   * Uses pointer events for unified mouse + touch support
+   * @param {ShadowRoot} shadow - Shadow root
+   * @private
+   */
+  setupDragHandler(shadow) {
+    // UXP: the fork's plain-DOM element names live behind ShadowDOMManager.
+    const draggable = window.VSC.ShadowDOMManager.getSpeedIndicator(shadow);
 
-    ctrl.addEventListener(
+    // UXP: mousedown, not pointerdown — Goanna builds may ship without pointer
+    // events, so a pointerdown listener might never fire. DragHandler then
+    // tracks the mouse drag on the document (see drag-handler.js).
+    draggable.addEventListener(
       'mousedown',
-      function(e) {
-        // Let the button click handler own its own events.
-        if (e.target.closest && e.target.closest('.vsc-btn')) {
-          return;
-        }
-        self.actionHandler.runAction('drag', false, e);
+      (e) => {
+        this.actionHandler.runAction(e.target.dataset['action'], false, e);
+        e.stopPropagation();
+        e.preventDefault();
+      },
+      true
+    );
+
+    // Double-click / double-tap to reset speed
+    draggable.addEventListener(
+      'dblclick',
+      (e) => {
+        const resetTarget = this.config.getKeyBinding('reset') || 1.0;
+        this.actionHandler.runAction('reset', resetTarget, e);
         e.stopPropagation();
         e.preventDefault();
       },
@@ -46,15 +65,20 @@ class ControlsManager {
     );
   }
 
-  setupButtonHandlers(container) {
-    var self = this;
-    container.querySelectorAll('.vsc-btn').forEach(function(button) {
+  /**
+   * Set up button click handlers
+   * @param {ShadowRoot} shadow - Shadow root
+   * @private
+   */
+  setupButtonHandlers(shadow) {
+    shadow.querySelectorAll('button').forEach((button) => {
+      // Click handler
       button.addEventListener(
         'click',
-        function(e) {
-          self.actionHandler.runAction(
+        (e) => {
+          this.actionHandler.runAction(
             e.target.dataset['action'],
-            self.config.getKeyBinding(e.target.dataset['action']),
+            this.config.getKeyBinding(e.target.dataset['action']),
             e
           );
           e.stopPropagation();
@@ -62,85 +86,110 @@ class ControlsManager {
         true
       );
 
+      // Touch handler to prevent conflicts
       button.addEventListener(
         'touchstart',
-        function(e) { e.stopPropagation(); },
+        (e) => {
+          e.stopPropagation();
+        },
         true
       );
     });
   }
 
-  setupWheelHandler(container, video) {
-    var self = this;
-    var controller = container.querySelector('.vsc-ctrl');
-    if (!controller) return;
+  /**
+   * Set up mouse wheel handler for speed control with touchpad filtering
+   *
+   * Cross-browser wheel event behavior:
+   * - Chrome/Safari/Edge: ALL devices use DOM_DELTA_PIXEL (mouse wheels ~100px, touchpads ~1-15px)
+   * - Firefox: Mouse wheels use DOM_DELTA_LINE, touchpads use DOM_DELTA_PIXEL
+   *
+   * Detection strategy: Use magnitude threshold in DOM_DELTA_PIXEL mode to distinguish
+   * mouse wheels (±100px typical) from touchpads (±1-15px typical). Threshold of 50px
+   * provides safety margin based on empirical browser testing.
+   *
+   * @param {ShadowRoot} shadow - Shadow root
+   * @param {HTMLVideoElement} video - Video element
+   * @private
+   */
+  setupWheelHandler(shadow, video) {
+    const controller = window.VSC.ShadowDOMManager.getController(shadow);
 
-    // Upstream 0.10.2 ergonomics, ported:
-    //   - hover-dwell gate (300 ms) so scrolling a feed past the controller
-    //     doesn't unintentionally change playback rate
-    //   - touchpad-style scrolls (DOM_DELTA_PIXEL with tiny deltaY) are ignored
-    //     so two-finger scroll gestures don't fire dozens of speed changes
-    //   - speed change goes through actionHandler.adjustSpeed so the
-    //     site-handler / fight-detection / event pipeline runs
-    var HOVER_DWELL_MS = 300;
-    var TOUCHPAD_THRESHOLD = 50;
-    var hoverStart = 0;
+    // Hover dwell gate: only allow wheel events after the cursor has rested on the
+    // controller for HOVER_DWELL_MS. This prevents accidental speed changes when
+    // scrolling through feed-based sites (Twitter, Reddit) where the cursor briefly
+    // passes over the controller. See #1352.
+    const HOVER_DWELL_MS = 300;
+    let hoverStart = 0;
 
-    controller.addEventListener('mouseenter', function(e) {
+    controller.addEventListener('mouseenter', (e) => {
       hoverStart = e.timeStamp;
+    });
+
+    controller.addEventListener('mouseleave', () => {
+      hoverStart = 0;
     });
 
     controller.addEventListener(
       'wheel',
-      function(event) {
+      (event) => {
+        // Browsers expose trackpad pinch and Ctrl+wheel zoom as ctrl-modified wheel events.
+        // Leave them untouched so browser zoom never becomes playback-speed intent.
+        if (event.ctrlKey) {
+          window.VSC.logger.debug('Browser zoom gesture ignored');
+          return;
+        }
+
+        // Reject wheel events before hover dwell threshold is met
         if (event.timeStamp - hoverStart < HOVER_DWELL_MS) {
           window.VSC.logger.debug('Wheel ignored: hover dwell threshold not met');
           return;
         }
-        if (event.deltaMode === event.DOM_DELTA_PIXEL &&
-            Math.abs(event.deltaY) < TOUCHPAD_THRESHOLD) {
-          window.VSC.logger.debug(
-            'Touchpad scroll detected (deltaY=' + event.deltaY + ') - ignoring'
-          );
-          return;
+
+        // Detect and filter touchpad events to prevent interference during page scrolling
+        if (event.deltaMode === event.DOM_DELTA_PIXEL) {
+          // Chrome/Safari/Edge: Use magnitude to distinguish mouse wheel (>50px) from touchpad (<50px)
+          const TOUCHPAD_THRESHOLD = 50;
+          if (Math.abs(event.deltaY) < TOUCHPAD_THRESHOLD) {
+            window.VSC.logger.debug(
+              `Touchpad scroll detected (deltaY: ${event.deltaY}) - ignoring`
+            );
+            return;
+          }
         }
+        // Firefox: DOM_DELTA_LINE events are typically legitimate mouse wheels, allow them
 
         event.preventDefault();
-        event.stopPropagation();
 
-        var step = 0.1;
-        var delta = event.deltaY < 0 ? step : -step;
-        self.actionHandler.adjustSpeed(video, delta, { relative: true });
+        const delta = Math.sign(event.deltaY);
+        const step = 0.1;
+        const speedDelta = delta < 0 ? step : -step;
+
+        this.actionHandler.adjustSpeed(video, speedDelta, { relative: true });
+
+        window.VSC.logger.debug(
+          `Wheel control: adjusting speed by ${speedDelta} (deltaMode: ${event.deltaMode}, deltaY: ${event.deltaY})`
+        );
       },
       { passive: false }
     );
   }
 
-  setupDoubleClickReset(container) {
-    var self = this;
-    var controller = container.querySelector('.vsc-ctrl');
-    if (!controller) return;
+  /**
+   * Set up click prevention for controller container
+   * @param {ShadowRoot} shadow - Shadow root
+   * @private
+   */
+  setupClickPrevention(shadow) {
+    const controller = window.VSC.ShadowDOMManager.getController(shadow);
 
-    controller.addEventListener(
-      'dblclick',
-      function(e) {
-        // Buttons own their own click semantics; never reset on a button dblclick.
-        if (e.target.closest && e.target.closest('.vsc-btn')) return;
-
-        var resetTarget = self.config.getKeyBinding('reset') || 1.0;
-        self.actionHandler.runAction('reset', resetTarget, e);
-        e.stopPropagation();
-        e.preventDefault();
-      },
-      true
-    );
-  }
-
-  setupClickPrevention(container) {
-    var controller = container.querySelector('.vsc-ctrl');
-    controller.addEventListener('click', function(e) { e.stopPropagation(); }, false);
-    controller.addEventListener('mousedown', function(e) { e.stopPropagation(); }, false);
+    // Prevent clicks from bubbling up to page
+    controller.addEventListener('click', (e) => e.stopPropagation(), false);
+    controller.addEventListener('mousedown', (e) => e.stopPropagation(), false);
   }
 }
 
+// Create singleton instance
 window.VSC.ControlsManager = ControlsManager;
+
+})();

@@ -477,6 +477,9 @@ class VideoSpeedExtension {
     if (this._customSheet) {
       this._customSheet.remove();
     }
+    // UXP: also the shared stylesheet ShadowDOMManager adds in place of
+    // per-controller shadow styles (upstream's leave with each shadow root).
+    window.VSC.ShadowDOMManager.removeCSS(document);
     this._controllerSheet = null;
     this._customSheet = null;
 

@@ -14,6 +14,9 @@ var VideoSpeedOverlay = {
   // This list is the single source of truth for shipped page scripts:
   // build-xpi.ps1 / build.sh refuse to build unless it matches the .js files
   // under src/ exactly (no missing entries, no unlisted files).
+  // Order mirrors upstream 0.11.1's src/entries/inject-entry.js, minus files
+  // the fork does not ship: utils/site-pattern.js (site rules are resolved in
+  // chrome) and ui/vsc-controller-element.js (a comment-only file).
   _contentScripts: [
     // constants.js reads both of these from window.VSC (upstream imports
     // them, so the bundle evaluates them first too).
@@ -21,35 +24,38 @@ var VideoSpeedOverlay = {
     "styles/controller-css-defaults.js",
     "utils/constants.js",
     "utils/logger.js",
+    "utils/debug-helper.js",
     "utils/dom-utils.js",
     // Speed-arbitration decision core + intent classifier + adapter, and the
-    // controller-visibility policy (upstream 0.11 inject-entry.js order).
-    // Must precede event-manager.js and video-controller.js, which construct
-    // the adapter.
+    // controller-visibility policy. Must precede event-manager.js and
+    // video-controller.js, which construct the adapter.
     "core/arbiter.js",
     "core/intent-classifier.js",
     "core/speed-arbitration.js",
     "core/controller-visibility.js",
     "utils/event-manager.js",
-    "utils/debug-helper.js",
-    "core/state-manager.js",
     "core/storage-manager.js",
     "core/settings.js",
-    "core/action-handler.js",
-    "core/video-controller.js",
+    "core/state-manager.js",
     "observers/media-observer.js",
     "observers/mutation-observer.js",
+    "core/action-handler.js",
+    "core/video-controller.js",
+    "ui/controls.js",
+    "ui/drag-handler.js",
+    "ui/shadow-dom.js",
+    // Every handler before index.js: SiteHandlerManager lists them eagerly.
     "site-handlers/base-handler.js",
-    "site-handlers/index.js",
-    "site-handlers/youtube-handler.js",
     "site-handlers/netflix-handler.js",
+    "site-handlers/youtube-handler.js",
     "site-handlers/facebook-handler.js",
     "site-handlers/amazon-handler.js",
     "site-handlers/apple-handler.js",
     "site-handlers/dailymotion-handler.js",
-    "ui/shadow-dom.js",
-    "ui/controls.js",
-    "ui/drag-handler.js",
+    "site-handlers/frame-handler.js",
+    "site-handlers/index.js",
+    // Netflix's page-world seek bridge (NetflixHandler posts to it).
+    "site-handlers/scripts/netflix.js",
     "content/inject.js"
   ],
 
