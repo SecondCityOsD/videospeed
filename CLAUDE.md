@@ -1,5 +1,17 @@
 # Video Speed Controller — Pale Moon / UXP Port
 
+> **0.11.1 upgrade in progress — parts of this file still describe 0.10.2.**
+> Current truth: every `src/` module is generated from upstream 0.11.1 by
+> `tools/port-upstream.mjs` (or listed there as fork-native); the page reads
+> settings through upstream's `VSC_REQUEST_SETTINGS` / `VSC_SETTINGS_READY`
+> handshake with the per-document bridge in `chrome/content/overlay.js` (no
+> inline settings seed); only `lastSpeed` is writable from the page
+> (`VSC_WRITE_STORAGE`); site rules (`siteRules`, migrated from the legacy
+> blacklist by `VSCPrefs.migrate()`) are resolved in chrome; the toolbar icon
+> reflects only the enabled state. Verify with `tools/upstream-tests/`
+> (`sync.mjs` header explains the run). Full rewrite of this file is part of
+> the release step.
+
 ## Project Overview
 
 XUL overlay extension port of `igrigorik/videospeed` (Chrome MV3, upstream

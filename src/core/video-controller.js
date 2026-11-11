@@ -63,13 +63,6 @@ class VideoController {
     this.setupMutationObserver();
 
     window.VSC.logger.info('VideoController initialized for video element');
-
-    // UXP: lifecycle event for the chrome overlay's toolbar badge.
-    this.dispatchControllerEvent('VSC_CONTROLLER_CREATED', {
-      controllerId: this.controllerId,
-      videoSrc: this.video.currentSrc || this.video.src,
-      tagName: this.video.tagName,
-    });
   }
 
   /**
@@ -558,13 +551,6 @@ class VideoController {
     delete this.video.vsc;
 
     window.VSC.logger.debug('VideoController removed successfully');
-
-    // UXP: lifecycle event for the chrome overlay's toolbar badge.
-    this.dispatchControllerEvent('VSC_CONTROLLER_REMOVED', {
-      controllerId: this.controllerId,
-      videoSrc: this.video.currentSrc || this.video.src,
-      tagName: this.video.tagName,
-    });
   }
 
   /**
@@ -648,26 +634,6 @@ class VideoController {
       // Video became invisible and controller is visible
       this.div.classList.add('vsc-hidden');
       window.VSC.logger.debug('Hiding controller - video became invisible');
-    }
-  }
-
-  /**
-   * UXP: dispatch controller lifecycle events for the toolbar badge.
-   * @param {string} eventType - VSC_CONTROLLER_CREATED or VSC_CONTROLLER_REMOVED
-   * @param {Object} detail - Event detail data
-   * @private
-   */
-  dispatchControllerEvent(eventType, detail) {
-    try {
-      const event = new CustomEvent(eventType, { detail, bubbles: true });
-      // Dispatch on documentElement so the chrome overlay (single-process Pale Moon)
-      // can catch it via gBrowser.addEventListener with wantsUntrusted=true.
-      document.documentElement.dispatchEvent(event);
-      window.VSC.logger.debug(
-        `Dispatched ${eventType} event for controller ${detail.controllerId}`
-      );
-    } catch (error) {
-      window.VSC.logger.error(`Failed to dispatch ${eventType} event:`, error);
     }
   }
 }

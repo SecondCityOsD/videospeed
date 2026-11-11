@@ -83,16 +83,6 @@ if (!window.VSC.VideoSpeedConfig) {
           return;
         }
 
-        // UXP: global disable. The chrome layer skips injection entirely when
-        // the extension is disabled (upstream's bridge strips `enabled` and
-        // aborts instead), but if a document somehow received our scripts,
-        // bail cleanly here — inject.js honors settings._abort.
-        if (storage.enabled === false) {
-          this.settings._abort = true;
-          window.VSC.logger.info('Extension disabled globally — aborting init');
-          return;
-        }
-
         this._loaded = true;
 
         // Handle key bindings migration/initialization

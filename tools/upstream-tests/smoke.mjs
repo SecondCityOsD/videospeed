@@ -55,7 +55,15 @@ async function boot(seed) {
   }
 
   const ctx = dom.getInternalVMContext();
-  new vm.Script(`window.VSC_initial_settings = ${JSON.stringify(seed)};`).runInContext(ctx);
+  // Answer the settings handshake as overlay.js's bridge does (bridge.mjs
+  // tests the real bridge).
+  window.document.documentElement.addEventListener('VSC_REQUEST_SETTINGS', () => {
+    window.document.documentElement.dispatchEvent(
+      new window.CustomEvent('VSC_SETTINGS_READY', {
+        detail: window.JSON.parse(JSON.stringify({ settings: seed, hostname: 'example.com' })),
+      })
+    );
+  });
   for (const rel of overlayScripts()) {
     try {
       new vm.Script(fs.readFileSync(path.join(repoRoot, 'src', rel), 'utf8'), {

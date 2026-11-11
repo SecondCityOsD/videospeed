@@ -3,10 +3,30 @@
 Components.utils.import("resource://gre/modules/Services.jsm");
 Components.utils.import("chrome://videospeed-modules/content/VSCPrefs.jsm");
 
+/**
+ * Chrome-side half of the extension: the UXP counterpart of upstream 0.11.1's
+ * background.js (toolbar icon, settings migration) and
+ * entries/content-bridge.js (the per-document settings bridge).
+ *
+ * For every http/https/file document (in every frame) that is not disabled,
+ * a bridge object is registered and the page scripts are injected. The page
+ * half (src/core/storage-manager.js) then talks to that bridge exactly as it
+ * talks to upstream's ISOLATED-world bridge — CustomEvents on the document
+ * element:
+ *   VSC_REQUEST_SETTINGS  page → chrome   answered with VSC_SETTINGS_READY
+ *                                         ({settings, hostname} or {abort})
+ *   VSC_WRITE_STORAGE     page → chrome   only lastSpeed, clamped
+ *   VSC_STORAGE_CHANGED   chrome → page   live pref changes
+ *   VSC_MESSAGE           chrome → page   popup commands and VSC_TEARDOWN
+ *
+ * UXP differences from upstream's bridge:
+ *   - Trust decisions run before injection: a disabled document gets no page
+ *     scripts at all (upstream injects and the bridge aborts).
+ *   - Site rules are resolved here and never reach the page; the page gets an
+ *     already-matched `siteDefaultSpeed` instead of the raw `siteRules`.
+ *   - The bridge registry is a chrome-side WeakMap, invisible to the page.
+ */
 var VideoSpeedOverlay = {
-
-  _tabControllers: new WeakMap(),
-  _settings: null,
 
   // Page-context scripts to inject in order on every content document.
   // Paths are relative to `resource://videospeed/`, which chrome.manifest
@@ -59,116 +79,61 @@ var VideoSpeedOverlay = {
     "content/inject.js"
   ],
 
+  // Upstream manifest content_scripts.exclude_matches: never injected.
+  _EXCLUDED_URL: /^https:\/\/(hangouts|meet)\.google\.com\//,
+
+  // Page → chrome write validation (constants.js SPEED_LIMITS).
+  _SPEED_MIN: 0.07,
+  _SPEED_MAX: 16,
+
+  // Content document → bridge state. Weak: a navigated-away document and its
+  // bridge are collected together. Doubles as the double-injection guard.
+  _bridges: new WeakMap(),
+
   init: function() {
     this._ensureToolbarButton();
-    this._loadSettings();
 
-    // Inject into every content document as soon as the DOM is ready.
+    // Upstream runs its storage migrations from background.js on install and
+    // update; VSCPrefs runs them once per application session.
+    VSCPrefs.migrate();
+
+    // Inject into every content document (all frames) as soon as its DOM is
+    // ready.
     gBrowser.addEventListener("DOMContentLoaded", this, false);
 
-    // Listen for VSC_* events bubbling from content. wantsUntrusted=true is
-    // required because CustomEvents fired by page scripts are untrusted.
-    gBrowser.addEventListener("VSC_CONTROLLER_CREATED", this, false, true);
-    gBrowser.addEventListener("VSC_CONTROLLER_REMOVED", this, false, true);
-    gBrowser.addEventListener("VSC_SAVE_SETTINGS", this, false, true);
-
-    gBrowser.tabContainer.addEventListener("TabClose", this, false);
-    gBrowser.tabContainer.addEventListener("TabSelect", this, false);
-
-    // Live settings: any extensions.videospeed.* pref change → broadcast to
-    // every open content document so already-open tabs see new values
-    // immediately, without needing a reload.
+    // Live settings: relay every extensions.videospeed.* change to the
+    // bridges of already-open documents.
     this._prefObserver = VSCPrefs.addObserver(this._onPrefChanged.bind(this));
 
-    this.updateIcon(false);
+    this.updateIcon(this._readSettings().enabled !== false);
   },
 
   uninit: function() {
     gBrowser.removeEventListener("DOMContentLoaded", this, false);
-    gBrowser.removeEventListener("VSC_CONTROLLER_CREATED", this, false, true);
-    gBrowser.removeEventListener("VSC_CONTROLLER_REMOVED", this, false, true);
-    gBrowser.removeEventListener("VSC_SAVE_SETTINGS", this, false, true);
-    gBrowser.tabContainer.removeEventListener("TabClose", this, false);
-    gBrowser.tabContainer.removeEventListener("TabSelect", this, false);
-
     if (this._prefObserver) {
       VSCPrefs.removeObserver(this._prefObserver);
       this._prefObserver = null;
     }
   },
 
-  _onPrefChanged: function(prefKey) {
-    // Refresh our in-memory snapshot so new tabs and re-injections see the
-    // new value too.
-    this._loadSettings();
-
-    if (!gBrowser) return;
-
-    var newValue = (this._settings && this._settings[prefKey] !== undefined)
-        ? this._settings[prefKey] : null;
-    var changes = {};
-    changes[prefKey] = { newValue: newValue };
-
-    var browsers = gBrowser.browsers;
-    for (var i = 0; i < browsers.length; i++) {
-      var win = browsers[i].contentWindow;
-      var doc = browsers[i].contentDocument;
-      if (!win || !doc || !doc.documentElement) continue;
-      try {
-        var clonedChanges = Components.utils.cloneInto(changes, win);
-        var evt = new win.CustomEvent('VSC_STORAGE_CHANGED', {
-          detail: clonedChanges,
-          bubbles: true,
-        });
-        doc.documentElement.dispatchEvent(evt);
-      } catch(e) {
-        // Tab may not have a content document yet, or it's a chrome:// tab.
-      }
-    }
-  },
-
   handleEvent: function(event) {
-    switch (event.type) {
-      case "DOMContentLoaded":
-        this._onContentReady(event);
-        break;
-      case "VSC_CONTROLLER_CREATED":
-        this._onControllerCreated(event);
-        break;
-      case "VSC_CONTROLLER_REMOVED":
-        this._onControllerRemoved(event);
-        break;
-      case "VSC_SAVE_SETTINGS":
-        this._onSaveSettings(event);
-        break;
-      case "TabClose":
-        this._onTabClose(event);
-        break;
-      case "TabSelect":
-        this._onTabSelect(event);
-        break;
+    if (event.type === "DOMContentLoaded") {
+      this._onContentReady(event);
     }
   },
 
-  _loadSettings: function() {
-    // VSCPrefs.getAll() dispatches getBoolPref/getIntPref/getCharPref by key
-    // class and parses the JSON keys. The previous hand-rolled reader called
-    // getStringPref on EVERY key, which threw a type mismatch on the bool/int
-    // prefs (enabled, rememberSpeed, audioBoolean, startHidden,
-    // controllerButtonSize, logLevel) and silently swallowed them — so those
-    // six settings never reached content and the controller always used
-    // defaults. Always seed from getAll().
+  _readSettings: function() {
     try {
-      this._settings = VSCPrefs.getAll();
+      return VSCPrefs.getAll();
     } catch(e) {
-      Components.utils.reportError("VSC: _loadSettings failed: " + e);
-      this._settings = {};
+      Components.utils.reportError("VSC: reading settings failed: " + e);
+      return {};
     }
   },
 
-  // --- Privileged site-matching helpers (ES5; ported from src/utils/site-pattern.js) ---
+  // --- Site rules (ES5 port of upstream src/utils/site-pattern.js) ---------
 
-  // Compile a blacklist / siteRule pattern string into a RegExp. Supports:
+  // Compile a site-rule / blacklist pattern into a RegExp. Supports:
   //   /regex/flags  → regex literal
   //   domain.tld    → domain-boundary match  (^|.|//)domain\.tld(/|:|$)
   //   anything else → escaped substring match
@@ -200,35 +165,40 @@ var VideoSpeedOverlay = {
     return new RegExp(escaped);
   },
 
-  // True if `href` matches any line of the user's newline-separated blacklist
-  // pref (the list the options page edits).
-  _isUrlBlacklisted: function(href) {
-    var bl = this._settings && this._settings.blacklist;
-    if (!bl) return false;
-    var lines = String(bl).split("\n");
-    for (var i = 0; i < lines.length; i++) {
-      var rx = this._compilePattern(lines[i]);
-      if (rx && rx.test(href)) return true;
-    }
-    return false;
-  },
-
-  // Per-site default speed from siteRules (first rule whose pattern matches
-  // and carries a numeric speed). Returns null when none applies. Drives the
-  // per-domain-speed feature; safe to call regardless of whether it's used.
-  _siteDefaultSpeed: function(href) {
-    var rules = this._settings && this._settings.siteRules;
+  // First rule whose pattern matches `href`, or null (upstream matchSiteRule).
+  _matchSiteRule: function(rules, href) {
     if (!rules || !rules.length) return null;
     for (var i = 0; i < rules.length; i++) {
       var rule = rules[i];
-      if (!rule) continue;
-      var rx = this._compilePattern(rule.pattern || "");
-      if (rx && rx.test(href) && rule.speed !== null && rule.speed !== undefined) {
-        return rule.speed;
-      }
+      var rx = this._compilePattern((rule && rule.pattern) || "");
+      if (rx && rx.test(href)) return rule;
     }
     return null;
   },
+
+  // Upstream's bridge: the legacy newline-separated blacklist is consulted
+  // only before migration has created siteRules; otherwise the first
+  // matching site rule decides, and `enabled: false` disables the site.
+  _isSiteDisabled: function(settings, href) {
+    if (!settings.siteRules && settings.blacklist) {
+      var lines = String(settings.blacklist).split("\n");
+      var legacy = [];
+      for (var i = 0; i < lines.length; i++) {
+        legacy.push({ pattern: lines[i] });
+      }
+      if (this._matchSiteRule(legacy, href)) return true;
+    }
+    var match = this._matchSiteRule(settings.siteRules, href);
+    return !!(match && match.enabled === false);
+  },
+
+  // The matching rule's speed — the page's initial authority (settings.js).
+  _siteRuleSpeed: function(settings, href) {
+    var match = this._matchSiteRule(settings.siteRules, href);
+    return (match && match.speed !== null && match.speed !== undefined) ? match.speed : null;
+  },
+
+  // --- Injection ---------------------------------------------------------
 
   _ensureToolbarButton: function() {
     var prefBranch = Services.prefs.getBranch("extensions.videospeed.");
@@ -252,80 +222,27 @@ var VideoSpeedOverlay = {
 
   _onContentReady: function(event) {
     var doc = event.originalTarget;
-    if (!doc || doc.nodeType !== doc.DOCUMENT_NODE) return;
-    if (!doc.location) return;
-
-    var scheme = doc.location.protocol;
-    if (scheme !== "http:" && scheme !== "https:" &&
-        scheme !== "file:"  && scheme !== "ftp:") {
-      return;
-    }
-
-    // Guard against double-injection (DOMContentLoaded may fire for sub-frames
-    // we already processed when their parent fired).
+    if (!doc || doc.nodeType !== doc.DOCUMENT_NODE || !doc.location) return;
+    var win = doc.defaultView;
     var root = doc.documentElement;
-    if (!root || root.hasAttribute("data-vsc-injected")) return;
+    if (!win || !root || this._bridges.has(doc)) return;
 
-    // Refresh from prefs in case settings changed in the options page since
-    // the chrome window opened.
-    this._loadSettings();
-
-    // Privileged trust decisions live HERE, in the chrome layer — never in
-    // page scope where a hostile page could read or tamper with them:
-    //   - global disable (the popup / options "enabled" toggle)
-    //   - per-site blacklist (the `blacklist` pref the options page edits)
-    // A disabled or blacklisted document gets NO injection at all: the page
-    // world never sees window.VSC, the user's blacklist never leaks into it,
-    // and those pages stay strictly cheaper (zero extra script parse).
+    // Upstream content_scripts.matches: http, https and file only (about:
+    // frames fail closed there; here they are simply never injected).
+    var scheme = doc.location.protocol;
+    if (scheme !== "http:" && scheme !== "https:" && scheme !== "file:") return;
     var href = doc.location.href;
-    if (this._settings.enabled === false || this._isUrlBlacklisted(href)) {
-      return;
-    }
+    if (this._EXCLUDED_URL.test(href)) return;
 
-    root.setAttribute("data-vsc-injected", "1");
+    // Where upstream's bridge would answer {abort}, inject nothing at all:
+    // the page world never sees window.VSC or the user's site rules.
+    var settings = this._readSettings();
+    if (settings.enabled === false || this._isSiteDisabled(settings, href)) return;
 
-    // SPA navigations leave the same <browser> element but the controllers
-    // are gone — make sure our per-browser tracking set isn't stuck thinking
-    // there are still controllers from the previous page.
-    var browser = this._getBrowserForDocument(doc);
-    if (browser) {
-      this._tabControllers.delete(browser);
-      if (browser === gBrowser.selectedBrowser) {
-        this.updateIcon(false);
-      }
-    }
-
-    this._injectInitialSettings(doc, this._siteDefaultSpeed(href));
+    var bridge = { doc: doc, win: win, active: false, disabledForDocument: false };
+    this._bridges.set(doc, bridge);
+    this._attachBridge(bridge);
     this._injectScripts(doc);
-  },
-
-  _injectInitialSettings: function(doc, siteDefaultSpeed) {
-    try {
-      // Build a SANITIZED copy of settings for page scope. The blacklist and
-      // siteRules are browsing-interest signals / trust data — they are
-      // resolved in the chrome layer (see _onContentReady) and must NOT be
-      // exposed to page JS (any tracker or userscript shares this world).
-      var safe = {};
-      var src = this._settings || {};
-      for (var k in src) {
-        if (k === "blacklist" || k === "siteRules") continue;
-        safe[k] = src[k];
-      }
-      if (siteDefaultSpeed !== null && siteDefaultSpeed !== undefined) {
-        safe.siteDefaultSpeed = siteDefaultSpeed;
-      }
-
-      var script = doc.createElement("script");
-      script.type = "application/javascript";
-      // Synchronously seed content scope with the user's settings so that
-      // storage-manager.js can read them on first access without waiting
-      // for any cross-context event.
-      script.textContent =
-        "window.VSC_initial_settings = " + JSON.stringify(safe) + ";";
-      (doc.head || doc.documentElement).appendChild(script);
-    } catch(e) {
-      Components.utils.reportError("VSC: Failed to inject initial settings: " + e);
-    }
   },
 
   _injectScripts: function(doc) {
@@ -340,10 +257,8 @@ var VideoSpeedOverlay = {
         script.type = "application/javascript";
         script.async = false; // preserve execution order across all scripts
         // Surface load failures (404, CSP block, parse error) to Browser Console.
-        script.onerror = function(ev) {
-          Components.utils.reportError(
-            "VSC: failed to load " + scriptPath + " (resource://" + scriptPath + ")"
-          );
+        script.onerror = function() {
+          Components.utils.reportError("VSC: failed to load " + basePath + scriptPath);
         };
         head.appendChild(script);
       } catch(e) {
@@ -352,96 +267,145 @@ var VideoSpeedOverlay = {
     });
   },
 
-  _onSaveSettings: function(event) {
+  // --- Bridge ------------------------------------------------------------
+
+  _attachBridge: function(bridge) {
+    var self = this;
+    var root = bridge.doc.documentElement;
+    // wantsUntrusted: page-dispatched CustomEvents are untrusted.
+    var onRequest = function() {
+      root.removeEventListener("VSC_REQUEST_SETTINGS", onRequest, false);
+      self._answerSettingsRequest(bridge);
+    };
+    root.addEventListener("VSC_REQUEST_SETTINGS", onRequest, false, true);
+    root.addEventListener("VSC_WRITE_STORAGE", function(event) {
+      self._onWriteStorage(bridge, event);
+    }, false, true);
+  },
+
+  _dispatch: function(bridge, type, detail) {
     try {
-      var data = event.detail;
-      if (!data) return;
-      for (var key in data) {
-        // SECURITY: this listener fires for UNTRUSTED page-dispatched events
-        // (registered with wantsUntrusted=true). Only allow writes to keys in
-        // our known pref schema, so a hostile page can't disable the
-        // extension, wipe the blacklist, or pollute the pref store with
-        // arbitrary keys.
-        if (!VSCPrefs.isValidKey(key)) {
-          Components.utils.reportError(
-            "VSC: ignoring settings write for unknown key: " + key);
-          continue;
-        }
-        // Pass the RAW value. VSCPrefs.set() encodes per key class — JSON keys
-        // (keyBindings/siteRules/speeds) get exactly one JSON.stringify. The
-        // old code pre-stringified objects here, so those keys were
-        // double-encoded and failed to parse back.
-        VSCPrefs.set(key, data[key]);
-      }
-      // Keep our in-memory snapshot in sync for the next injection.
-      this._loadSettings();
+      var evt = new bridge.win.CustomEvent(type, {
+        detail: Components.utils.cloneInto(detail, bridge.win),
+      });
+      bridge.doc.documentElement.dispatchEvent(evt);
     } catch(e) {
-      Components.utils.reportError("VSC: Failed to save settings: " + e);
+      // The document went away (dead object) — nothing to deliver to.
     }
   },
 
-  _getBrowserForDocument: function(doc) {
-    if (!gBrowser || !doc) return null;
-    var browsers = gBrowser.browsers;
-    for (var i = 0; i < browsers.length; i++) {
-      if (browsers[i].contentDocument === doc) {
-        return browsers[i];
+  _answerSettingsRequest: function(bridge) {
+    var settings = this._readSettings();
+    var href = bridge.doc.location.href;
+    if (bridge.disabledForDocument || settings.enabled === false ||
+        this._isSiteDisabled(settings, href)) {
+      this._dispatch(bridge, "VSC_SETTINGS_READY", { abort: true });
+      return;
+    }
+
+    // Upstream strips `enabled` and the legacy `blacklist`; the fork also
+    // strips `siteRules` (privacy) and sends the resolved rule speed instead.
+    var publicSettings = {};
+    for (var key in settings) {
+      if (key === "enabled" || key === "blacklist" || key === "siteRules") continue;
+      publicSettings[key] = settings[key];
+    }
+    var speed = this._siteRuleSpeed(settings, href);
+    if (speed !== null) {
+      publicSettings.siteDefaultSpeed = speed;
+    }
+
+    bridge.active = true;
+    this._dispatch(bridge, "VSC_SETTINGS_READY", {
+      settings: publicSettings,
+      hostname: bridge.doc.location.hostname.replace(/^www\./, ""),
+    });
+  },
+
+  // Only lastSpeed can cross from the page into extension storage.
+  _onWriteStorage: function(bridge, event) {
+    if (!bridge.active) return;
+    var data = event.detail;
+    if (!data || typeof data !== "object") return;
+    var speed = data.lastSpeed;
+    if (typeof speed === "number" && isFinite(speed)) {
+      VSCPrefs.set("lastSpeed", Math.min(Math.max(speed, this._SPEED_MIN), this._SPEED_MAX));
+    }
+  },
+
+  // Call `callback(bridge)` for every bridged document in `win` and all of
+  // its descendant frames.
+  _forEachBridgeIn: function(win, callback) {
+    if (!win) return;
+    try {
+      var bridge = this._bridges.get(win.document);
+      if (bridge) callback(bridge);
+      for (var i = 0; i < win.frames.length; i++) {
+        this._forEachBridgeIn(win.frames[i], callback);
       }
-    }
-    return null;
-  },
-
-  _getControllerSet: function(browser) {
-    var set = this._tabControllers.get(browser);
-    if (!set) {
-      set = new Set();
-      this._tabControllers.set(browser, set);
-    }
-    return set;
-  },
-
-  _onControllerCreated: function(event) {
-    var doc = event.target.ownerDocument || event.target;
-    var browser = this._getBrowserForDocument(doc);
-    if (!browser) return;
-    var data = event.detail || {};
-    var set = this._getControllerSet(browser);
-    set.add(data.controllerId || "default");
-    if (browser === gBrowser.selectedBrowser) {
-      this.updateIcon(true);
+    } catch(e) {
+      // Frame navigated away mid-walk (dead object).
     }
   },
 
-  _onControllerRemoved: function(event) {
-    var doc = event.target.ownerDocument || event.target;
-    var browser = this._getBrowserForDocument(doc);
-    if (!browser) return;
-    var data = event.detail || {};
-    var set = this._getControllerSet(browser);
-    set.delete(data.controllerId || "default");
-    if (browser === gBrowser.selectedBrowser) {
-      this.updateIcon(set.size > 0);
-    }
-    if (set.size === 0) {
-      this._tabControllers.delete(browser);
+  _forEachBridge: function(callback) {
+    var browsers = gBrowser ? gBrowser.browsers : [];
+    for (var i = 0; i < browsers.length; i++) {
+      this._forEachBridgeIn(browsers[i].contentWindow, callback);
     }
   },
 
-  _onTabClose: function(event) {
-    var browser = gBrowser.getBrowserForTab(event.target);
-    this._tabControllers.delete(browser);
+  _onPrefChanged: function(prefKey) {
+    var self = this;
+    var settings = this._readSettings();
+
+    if (prefKey === "enabled") {
+      var enabled = settings.enabled !== false;
+      this.updateIcon(enabled);
+      this._forEachBridge(function(bridge) {
+        // Any disabled state makes this document reload-only from here on
+        // (#1527); a disable also tears down what is already running.
+        bridge.disabledForDocument = true;
+        if (!enabled) {
+          bridge.active = false;
+          self._dispatch(bridge, "VSC_MESSAGE", { type: "VSC_TEARDOWN" });
+        }
+      });
+      return;
+    }
+
+    // Never relayed: the legacy blacklist (upstream) and the raw site rules
+    // (UXP privacy). Keys outside the settings schema have nothing to relay.
+    if (prefKey === "blacklist" || prefKey === "siteRules" || !(prefKey in settings)) return;
+
+    var changes = {};
+    changes[prefKey] = { newValue: settings[prefKey] };
+    this._forEachBridge(function(bridge) {
+      if (bridge.active) {
+        self._dispatch(bridge, "VSC_STORAGE_CHANGED", changes);
+      }
+    });
   },
 
-  _onTabSelect: function() {
-    var browser = gBrowser.selectedBrowser;
-    var set = this._tabControllers.get(browser);
-    this.updateIcon(set && set.size > 0);
+  // Popup commands reach every active bridge in the selected tab, in every
+  // frame (upstream: chrome.tabs.sendMessage → all frames' bridges).
+  sendToSelectedTab: function(message) {
+    var self = this;
+    this._forEachBridgeIn(gBrowser.selectedBrowser.contentWindow, function(bridge) {
+      if (bridge.active) {
+        self._dispatch(bridge, "VSC_MESSAGE", message);
+      }
+    });
   },
 
-  updateIcon: function(active) {
+  // --- Toolbar -----------------------------------------------------------
+
+  // As upstream's background.js: the icon reflects only whether the
+  // extension is enabled.
+  updateIcon: function(enabled) {
     var button = document.getElementById("videospeed-button");
     if (button) {
-      if (active) {
+      if (enabled) {
         button.removeAttribute("status");
       } else {
         button.setAttribute("status", "disabled");

@@ -1,8 +1,8 @@
 // Load the fork's page scripts the way Pale Moon does: successive classic
 // scripts (vm.Script in jsdom's context — NOT eval, which would hide
-// let/const/class declarations) in ONE window, in overlay.js order, after the
-// inline settings seed. vitest imports modules as ES modules and cannot see
-// these problems.
+// let/const/class declarations) in ONE window, in overlay.js order. The page's
+// settings request is left unanswered: this check is about loading. vitest
+// imports modules as ES modules and cannot see these problems.
 //   node tools/upstream-tests/classic-load.mjs
 // Fails on any load error; reports page-global leaks.
 import fs from 'node:fs';
@@ -23,7 +23,6 @@ const errors = [];
 window.addEventListener('error', (e) => errors.push(`window error: ${e.message}`));
 window.console.log = () => {};
 
-new vm.Script('window.VSC_initial_settings = {"enabled":true,"logLevel":2};').runInContext(ctx);
 const before = new Set(Object.getOwnPropertyNames(window));
 for (const rel of scripts) {
   try {

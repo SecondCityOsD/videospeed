@@ -29,8 +29,7 @@ var tcDefaults = {
     { action: "fast", key: 71, value: 1.8, force: false, predefined: true },
     { action: "mark", key: 77, value: 0, force: false, predefined: true },
     { action: "jump", key: 74, value: 0, force: false, predefined: true }
-  ],
-  blacklist: "www.instagram.com\nx.com\nimgur.com\nteams.microsoft.com\nmeet.google.com"
+  ]
 };
 
 var keyBindings = [];
@@ -215,6 +214,35 @@ function validate() {
   return valid;
 }
 
+// The "disabled sites" box edits the site rules that disable a site
+// (enabled: false); until the options page grows upstream's full site-rules
+// editor, rules that only set a speed are kept as they are, and a listed
+// pattern keeps any speed its rule already had.
+function disabledSitePatterns(storage) {
+  if (!storage.siteRules) return storage.blacklist || "";
+  return storage.siteRules
+    .filter(function(rule) { return rule.enabled === false; })
+    .map(function(rule) { return rule.pattern; })
+    .join("\n");
+}
+
+function disabledSitesToRules(text) {
+  var existing = VSCPrefs.getAll().siteRules || [];
+  var patterns = text.split("\n")
+    .map(function(line) { return line.replace(regStrip, ""); })
+    .filter(Boolean);
+  var rules = patterns.map(function(pattern) {
+    var prior = existing.find(function(rule) { return rule.pattern === pattern; });
+    return { pattern: pattern, enabled: false, speed: prior ? prior.speed : null };
+  });
+  existing.forEach(function(rule) {
+    if (rule.enabled !== false && patterns.indexOf(rule.pattern) === -1) {
+      rules.push(rule);
+    }
+  });
+  return rules;
+}
+
 function save_options() {
   if (validate() === false) return;
 
@@ -233,7 +261,7 @@ function save_options() {
     controllerButtonSize: document.getElementById("controllerButtonSize").value,
     logLevel: document.getElementById("logLevel").value,
     keyBindings: keyBindings,
-    blacklist: document.getElementById("blacklist").value.replace(regStrip, "")
+    siteRules: disabledSitesToRules(document.getElementById("blacklist").value)
   });
 
   var status = document.getElementById("status");
@@ -251,7 +279,7 @@ function restore_options() {
   document.getElementById("controllerOpacity").value = storage.controllerOpacity;
   document.getElementById("controllerButtonSize").value = storage.controllerButtonSize;
   document.getElementById("logLevel").value = storage.logLevel;
-  document.getElementById("blacklist").value = storage.blacklist;
+  document.getElementById("blacklist").value = disabledSitePatterns(storage);
 
   var bindings = storage.keyBindings || [];
   if (!bindings.some(function(x) { return x.action === "display"; })) {
@@ -299,8 +327,11 @@ function restore_defaults() {
     controllerOpacity: tcDefaults.controllerOpacity,
     controllerButtonSize: tcDefaults.controllerButtonSize,
     logLevel: tcDefaults.logLevel,
-    keyBindings: tcDefaults.keyBindings,
-    blacklist: tcDefaults.blacklist
+    keyBindings: tcDefaults.keyBindings
+  });
+  // Back to the shipped defaults (defaults/preferences/prefs.js).
+  ["siteRules", "blacklist", "exclusiveKeys", "customCSS"].forEach(function(key) {
+    VSCPrefs.reset(key);
   });
 
   // Remove dynamically-added shortcuts before restoring

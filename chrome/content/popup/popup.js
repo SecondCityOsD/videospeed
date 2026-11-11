@@ -1,6 +1,6 @@
 /**
  * Video Speed Controller — Popup (XUL, UXP/chrome context)
- * Updated for 0.10.2 features
+ * Tracks upstream 0.11.1 src/ui/popup/popup.js.
  */
 
 Components.utils.import("chrome://videospeed-modules/content/VSCPrefs.jsm");
@@ -11,22 +11,14 @@ function getMainWindow() {
   return wm.getMostRecentWindow("navigator:browser");
 }
 
-function sendToContent(messageName, data) {
+// Deliver a popup command through the chrome-side bridges of the selected
+// tab: every frame VSC is active in, as upstream's chrome.tabs.sendMessage
+// reaches every frame's bridge.
+function sendToContent(message) {
   var mainWindow = getMainWindow();
-  if (!mainWindow || !mainWindow.gBrowser) return;
-  var browser = mainWindow.gBrowser.selectedBrowser;
-  if (!browser || !browser.contentDocument || !browser.contentWindow) return;
-
+  if (!mainWindow || !mainWindow.VideoSpeedOverlay) return;
   try {
-    // Clone the chrome-scope `data` into the content window so the content
-    // script's `event.detail` access doesn't throw "Permission denied to
-    // access property 'detail'". Use the content window's own CustomEvent
-    // constructor so the event itself is in content scope too.
-    var clonedDetail = Components.utils.cloneInto(data, browser.contentWindow);
-    var evt = new browser.contentWindow.CustomEvent('VSC_MESSAGE', {
-      detail: clonedDetail,
-    });
-    browser.contentDocument.documentElement.dispatchEvent(evt);
+    mainWindow.VideoSpeedOverlay.sendToSelectedTab(message);
   } catch (e) {
     Components.utils.reportError('VSC popup: sendToContent failed: ' + e);
   }
@@ -135,24 +127,24 @@ window.addEventListener("load", function() {
   function initializeSpeedControls() {
     document.getElementById("speed-decrease").addEventListener("command", function() {
       var delta = parseFloat(this.getAttribute("delta"));
-      sendToContent("VSC_MESSAGE", { type: "VSC_ADJUST_SPEED", payload: { delta: delta } });
+      sendToContent({ type: "VSC_ADJUST_SPEED", payload: { delta: delta } });
     });
 
     document.getElementById("speed-increase").addEventListener("command", function() {
       var delta = parseFloat(this.getAttribute("delta"));
-      sendToContent("VSC_MESSAGE", { type: "VSC_ADJUST_SPEED", payload: { delta: delta } });
+      sendToContent({ type: "VSC_ADJUST_SPEED", payload: { delta: delta } });
     });
 
     document.getElementById("speed-reset").addEventListener("command", function() {
       var preferredSpeed = parseFloat(this.getAttribute("label"));
-      sendToContent("VSC_MESSAGE", { type: "VSC_SET_SPEED", payload: { speed: preferredSpeed } });
+      sendToContent({ type: "VSC_SET_SPEED", payload: { speed: preferredSpeed } });
     });
 
     var presetBtns = document.querySelectorAll(".preset-btn");
     Array.prototype.forEach.call(presetBtns, function(btn) {
       btn.addEventListener("command", function() {
         var speed = parseFloat(this.getAttribute("speed"));
-        sendToContent("VSC_MESSAGE", { type: "VSC_SET_SPEED", payload: { speed: speed } });
+        sendToContent({ type: "VSC_SET_SPEED", payload: { speed: speed } });
       });
     });
   }

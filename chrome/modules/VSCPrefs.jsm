@@ -16,11 +16,33 @@ var VSCPrefs = {
     return this._branch;
   },
 
-  BOOL_KEYS: ["enabled", "rememberSpeed", "audioBoolean", "startHidden"],
-  INT_KEYS: ["controllerButtonSize", "logLevel", "displayKeyCode"],
-  CHAR_KEYS: ["lastSpeed", "controllerOpacity", "blacklist", "keyBindings", "speeds", "siteRules"],
-  JSON_KEYS: ["keyBindings", "speeds", "siteRules"],
+  BOOL_KEYS: ["enabled", "rememberSpeed", "exclusiveKeys", "audioBoolean", "startHidden"],
+  INT_KEYS: ["controllerButtonSize", "logLevel", "schemaVersion"],
+  CHAR_KEYS: ["lastSpeed", "controllerOpacity", "customCSS", "blacklist", "keyBindings", "siteRules"],
+  JSON_KEYS: ["keyBindings", "siteRules"],
   FLOAT_KEYS: ["lastSpeed", "controllerOpacity"],
+
+  // Keys upstream's background.js#migrateConfig removes on install/update.
+  DEPRECATED_KEYS: [
+    // Removed in v0.9.x
+    "speeds",
+    "version",
+    // Replaced by smarter fight-back defaults in event-manager.js
+    "forceLastSavedSpeed",
+    // Migrated to keyBindings array in v0.6.x
+    "resetSpeed",
+    "speedStep",
+    "fastSpeed",
+    "rewindTime",
+    "advanceTime",
+    "resetKeyCode",
+    "slowerKeyCode",
+    "fasterKeyCode",
+    "rewindKeyCode",
+    "advanceKeyCode",
+    "fastKeyCode",
+    "displayKeyCode",
+  ],
 
   /**
    * Read all prefs and return a settings object matching the format
@@ -57,7 +79,13 @@ var VSCPrefs = {
     // content-save bug pre-stringified objects before VSCPrefs.set re-encoded
     // them, so keyBindings could be stored as JSON.stringify(JSON.stringify(x)).
     // A single parse then yields a string — parse once more to recover it.
+    // An empty siteRules pref means "absent" (null), as an unset key does in
+    // upstream's storage: the legacy blacklist is consulted only then.
     this.JSON_KEYS.forEach(function(key) {
+      if (key === "siteRules" && !settings[key]) {
+        settings[key] = null;
+        return;
+      }
       try {
         var parsed = JSON.parse(settings[key]);
         if (typeof parsed === "string") {
@@ -65,7 +93,7 @@ var VSCPrefs = {
         }
         settings[key] = parsed;
       } catch(e) {
-        settings[key] = (key === "speeds") ? {} : [];
+        settings[key] = (key === "siteRules") ? null : [];
       }
     });
 
@@ -102,15 +130,109 @@ var VSCPrefs = {
   },
 
   /**
-   * Whether a key belongs to our known pref schema. Used by the chrome
-   * overlay to reject writes for unknown keys arriving on the (untrusted)
-   * VSC_SAVE_SETTINGS content event — a hostile page must not be able to
-   * write arbitrary prefs.
+   * Drop a user value so the pref falls back to its default.
    */
-  isValidKey: function(key) {
-    return this.BOOL_KEYS.indexOf(key) !== -1 ||
-           this.INT_KEYS.indexOf(key) !== -1 ||
-           this.CHAR_KEYS.indexOf(key) !== -1;
+  reset: function(key) {
+    if (this.branch.prefHasUserValue(key)) {
+      this.branch.clearUserPref(key);
+    }
+  },
+
+  _migrated: false,
+
+  /**
+   * Storage migrations, once per application session. Upstream runs the same
+   * steps from background.js on install/update (migrateConfig,
+   * migrateKeyBindingsV2) and from settings.load() (blacklist → siteRules).
+   */
+  migrate: function() {
+    if (this._migrated) return;
+    this._migrated = true;
+
+    var self = this;
+    this.DEPRECATED_KEYS.forEach(function(key) {
+      try { self.reset(key); } catch(e) {}
+    });
+
+    try {
+      this.migrateBlacklist();
+    } catch(e) {
+      Cu.reportError("VSC: blacklist migration failed: " + e);
+    }
+    try {
+      this.migrateKeyBindingsV2();
+    } catch(e) {
+      Cu.reportError("VSC: key binding migration failed: " + e);
+    }
+  },
+
+  /**
+   * Legacy blacklist → siteRules (one-shot). Only a blacklist the user
+   * customized is migrated; an untouched one leaves the default siteRules in
+   * place. The blacklist itself is kept, as upstream keeps it.
+   */
+  migrateBlacklist: function() {
+    var b = this.branch;
+    if (b.prefHasUserValue("siteRules") || !b.prefHasUserValue("blacklist")) return;
+    var regStrip = /^[\r\t\f\v ]+|[\r\t\f\v ]+$/gm;
+    var rules = b.getCharPref("blacklist")
+      .split("\n")
+      .map(function(line) { return line.replace(regStrip, ""); })
+      .filter(Boolean)
+      .map(function(pattern) { return { pattern: pattern, enabled: false, speed: null }; });
+    this.set("siteRules", rules);
+  },
+
+  /**
+   * Key-binding schema v2: keyCode integers → event.code strings. A port of
+   * upstream background.js#migrateKeyBindingsV2, reading the same keyboard
+   * maps from the shipped src/utils/key-maps.js:
+   *   1. predefined bindings — hardcoded map, zero ambiguity
+   *   2. custom bindings — KEYCODE_TO_CODE best-effort lookup
+   *   3. unmappable keyCodes — code: null (already broken, user re-records)
+   *   4. every predefined action exists
+   * Idempotent; one write per key.
+   */
+  migrateKeyBindingsV2: function() {
+    var settings = this.getAll();
+    var bindings = settings.keyBindings;
+
+    // No bindings stored → fresh install; the page uses v2 defaults directly.
+    if (!Array.isArray(bindings) || bindings.length === 0) return;
+
+    var allHaveCode = bindings.every(function(binding) { return binding.code !== undefined; });
+    if (settings.schemaVersion === 2 && allHaveCode) return;
+
+    var scope = { window: {} };
+    Services.scriptloader.loadSubScript("resource://videospeed/utils/key-maps.js", scope, "UTF-8");
+    var maps = scope.window.VSC;
+
+    var migrated = bindings.map(function(binding) {
+      if (binding.code !== undefined) return binding;
+      var legacyKey = binding.key;
+      if (binding.predefined && maps.PREDEFINED_CODE_MAP[legacyKey]) {
+        var mapped = maps.PREDEFINED_CODE_MAP[legacyKey];
+        return Object.assign({}, binding,
+          { code: mapped.code, keyCode: legacyKey, displayKey: mapped.displayKey });
+      }
+      var code = maps.KEYCODE_TO_CODE[legacyKey];
+      if (code) {
+        return Object.assign({}, binding,
+          { code: code, keyCode: legacyKey, displayKey: maps.displayKeyFromCode(code) });
+      }
+      return Object.assign({}, binding, { code: null, keyCode: legacyKey, displayKey: "" });
+    });
+
+    var existing = migrated.map(function(binding) { return binding.action; });
+    maps.PREDEFINED_ACTIONS.forEach(function(action) {
+      if (existing.indexOf(action) === -1) {
+        migrated.push(Object.assign({ action: action }, maps.DEFAULT_BINDINGS[action],
+          { predefined: true }));
+      }
+    });
+
+    this.set("keyBindings", migrated);
+    this.set("schemaVersion", 2);
   },
 
   /**

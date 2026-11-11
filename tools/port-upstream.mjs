@@ -16,8 +16,9 @@
 // An edit is either [from, to] (replace that exact text) or
 // { from, through, to } (replace the span from the start of `from` to the end
 // of `through`, each matching exactly once — for whole blocks whose body would
-// be error-prone to transcribe). Edits apply in order, each to the result of
-// the previous one.
+// be error-prone to transcribe) or { every, to, count } (replace every
+// occurrence of `every`, which must occur exactly `count` times — for a
+// repeated idiom). Edits apply in order, each to the result of the previous.
 // Default upstream tree: ../videospeed-0.11.1/src next to this repository.
 import fs from 'node:fs';
 import path from 'node:path';
@@ -410,32 +411,6 @@ if (typeof window.requestIdleCallback === 'undefined') {
 
   'core/settings.js': {
     edits: [
-      [
-        `        // null = bridge signaled abort (site disabled/blacklisted)
-        if (storage === null) {
-          this.settings._abort = true;
-          return;
-        }
-
-        this._loaded = true;`,
-        `        // null = bridge signaled abort (site disabled/blacklisted)
-        if (storage === null) {
-          this.settings._abort = true;
-          return;
-        }
-
-        // UXP: global disable. The chrome layer skips injection entirely when
-        // the extension is disabled (upstream's bridge strips \`enabled\` and
-        // aborts instead), but if a document somehow received our scripts,
-        // bail cleanly here — inject.js honors settings._abort.
-        if (storage.enabled === false) {
-          this.settings._abort = true;
-          window.VSC.logger.info('Extension disabled globally — aborting init');
-          return;
-        }
-
-        this._loaded = true;`,
-      ],
       {
         from: '        // Migrate legacy blacklist → siteRules (one-shot)',
         through:
@@ -569,19 +544,6 @@ if (typeof window.requestIdleCallback === 'undefined') {
 
   'core/video-controller.js': {
     edits: [
-      [
-        `    window.VSC.logger.info('VideoController initialized for video element');
-  }`,
-        `    window.VSC.logger.info('VideoController initialized for video element');
-
-    // UXP: lifecycle event for the chrome overlay's toolbar badge.
-    this.dispatchControllerEvent('VSC_CONTROLLER_CREATED', {
-      controllerId: this.controllerId,
-      videoSrc: this.video.currentSrc || this.video.src,
-      tagName: this.video.tagName,
-    });
-  }`,
-      ],
       [
         '      this.arbitration.classifier?.observeMediaInit(this.video, performance.now());',
         `      if (this.arbitration.classifier) {
@@ -820,51 +782,6 @@ if (typeof window.requestIdleCallback === 'undefined') {
     if (arbitration) {
       arbitration.release(this.video);
     }`,
-      ],
-      [
-        `    window.VSC.logger.debug('VideoController removed successfully');
-  }`,
-        `    window.VSC.logger.debug('VideoController removed successfully');
-
-    // UXP: lifecycle event for the chrome overlay's toolbar badge.
-    this.dispatchControllerEvent('VSC_CONTROLLER_REMOVED', {
-      controllerId: this.controllerId,
-      videoSrc: this.video.currentSrc || this.video.src,
-      tagName: this.video.tagName,
-    });
-  }`,
-      ],
-      [
-        `
-}
-
-// Create singleton instance
-window.VSC.VideoController = VideoController;`,
-        `
-
-  /**
-   * UXP: dispatch controller lifecycle events for the toolbar badge.
-   * @param {string} eventType - VSC_CONTROLLER_CREATED or VSC_CONTROLLER_REMOVED
-   * @param {Object} detail - Event detail data
-   * @private
-   */
-  dispatchControllerEvent(eventType, detail) {
-    try {
-      const event = new CustomEvent(eventType, { detail, bubbles: true });
-      // Dispatch on documentElement so the chrome overlay (single-process Pale Moon)
-      // can catch it via gBrowser.addEventListener with wantsUntrusted=true.
-      document.documentElement.dispatchEvent(event);
-      window.VSC.logger.debug(
-        \`Dispatched \${eventType} event for controller \${detail.controllerId}\`
-      );
-    } catch (error) {
-      window.VSC.logger.error(\`Failed to dispatch \${eventType} event:\`, error);
-    }
-  }
-}
-
-// Create singleton instance
-window.VSC.VideoController = VideoController;`,
       ],
     ],
   },
@@ -1376,6 +1293,44 @@ window.VSC.VideoController = VideoController;`,
       ],
     ],
   },
+
+  // Page half of the settings bridge; the chrome half is overlay.js (the
+  // counterpart of upstream's entries/content-bridge.js).
+  'core/storage-manager.js': {
+    edits: [
+      [
+        `  const hasChrome = typeof chrome !== 'undefined' && chrome.storage && chrome.storage.sync;
+`,
+        `  const hasChrome = typeof chrome !== 'undefined' && chrome.storage && chrome.storage.sync;
+
+  // UXP: stands in for upstream's \`window.VSC.logger?.<level>?.(message)\`.
+  const log = (level, message) => {
+    const logger = window.VSC.logger;
+    if (logger != null && logger[level] != null) {
+      logger[level](message);
+    }
+  };
+`,
+      ],
+      { every: 'window.VSC.logger?.debug?.(', to: "log('debug', ", count: 4 },
+      { every: 'window.VSC.logger?.error?.(', to: "log('error', ", count: 5 },
+      { every: 'window.VSC.logger?.warn?.(', to: "log('warn', ", count: 3 },
+      [
+        `  class StorageManager {
+    static errorCallback = null;
+`,
+        `  class StorageManager {
+`,
+      ],
+      [
+        '  window.VSC.StorageManager = StorageManager;',
+        `  // UXP: static class fields are below the Pale Moon syntax floor.
+  StorageManager.errorCallback = null;
+
+  window.VSC.StorageManager = StorageManager;`,
+      ],
+    ],
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -1401,6 +1356,17 @@ function generate(rel, upstreamText) {
   let text = upstreamText.replace(/\r\n/g, '\n');
   const countOf = (needle) => text.split(needle).length - 1;
   for (const edit of edits) {
+    if (!Array.isArray(edit) && edit.every !== undefined) {
+      const found = countOf(edit.every);
+      if (found !== edit.count) {
+        problems.push(
+          `edit expected exactly ${edit.count} matches, found ${found}:\n      ${edit.every.split('\n')[0]}`
+        );
+        continue;
+      }
+      text = text.split(edit.every).join(edit.to);
+      continue;
+    }
     const { from, through, to } = Array.isArray(edit) ? { from: edit[0], to: edit[1] } : edit;
     const markers = through === undefined ? [from] : [from, through];
     const bad = markers.filter((marker) => countOf(marker) !== 1);
