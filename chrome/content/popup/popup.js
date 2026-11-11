@@ -28,11 +28,11 @@ window.addEventListener("load", function() {
   loadSettingsAndInitialize();
 
   document.getElementById("config").addEventListener("command", function() {
+    // Upstream: chrome.runtime.openOptionsPage() with options_ui.open_in_tab —
+    // focuses the options tab when one is already open.
     var mainWindow = getMainWindow();
-    if (mainWindow && mainWindow.gBrowser) {
-      mainWindow.gBrowser.selectedTab = mainWindow.gBrowser.addTab(
-        "chrome://videospeed/content/options/options.xul"
-      );
+    if (mainWindow && mainWindow.switchToTabHavingURI) {
+      mainWindow.switchToTabHavingURI("chrome://videospeed/content/options/options.html", true);
     }
     var panel = getMainWindow().document.getElementById("videospeed-panel");
     if (panel) panel.hidePopup();

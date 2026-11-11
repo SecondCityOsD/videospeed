@@ -270,7 +270,8 @@ class VideoSpeedExtension {
    * document.adoptedStyleSheets), so controller CSS goes in <style> elements.
    * Same two-sheet split as upstream: _controllerSheet (built-in defaults,
    * domain-preprocessed, never changes at runtime) and _customSheet (user
-   * additions, injected raw, live-updatable).
+   * additions, injected raw, live-updatable). @import rules are removed:
+   * replaceSync() drops them, a <style> element would load them.
    * @param {string} css
    * @param {string} [id]
    * @returns {HTMLStyleElement}
@@ -281,7 +282,7 @@ class VideoSpeedExtension {
     if (id) {
       styleEl.id = id;
     }
-    styleEl.textContent = css;
+    styleEl.textContent = window.VSC.stripCSSImports(css);
     (document.head || document.documentElement).appendChild(styleEl);
     return styleEl;
   }
@@ -317,7 +318,7 @@ class VideoSpeedExtension {
         if (!this._customSheet) {
           this._customSheet = this._appendStyle(customCSS, 'vsc-controller-custom');
         } else {
-          this._customSheet.textContent = customCSS;
+          this._customSheet.textContent = window.VSC.stripCSSImports(customCSS);
         }
       } else if (this._customSheet) {
         this._customSheet.remove();

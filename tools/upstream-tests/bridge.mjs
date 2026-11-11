@@ -1,8 +1,7 @@
 // Chrome-side bridge test: the real chrome/content/overlay.js and
-// chrome/modules/VSCPrefs.jsm, loaded against a simulated XPCOM layer (pref
-// branch with default/user values and observers, cloneInto, loadSubScript,
-// gBrowser), driving jsdom content documents that run the fork's real page
-// scripts. Covers injection decisions, the settings handshake, page writes,
+// chrome/modules/VSCPrefs.jsm, loaded against the simulated XPCOM layer in
+// xpcom.mjs (plus a stub gBrowser), driving jsdom content documents that run
+// the fork's real page scripts. Covers injection decisions, the settings handshake, page writes,
 // pref relays, popup routing into frames, disable/teardown and migrations.
 //   node tools/upstream-tests/bridge.mjs
 // Exits non-zero on any failed expectation.
@@ -10,6 +9,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import { repoRoot, overlayScripts, requireFromRunDir } from './lib.mjs';
+import { makePrefs } from './xpcom.mjs';
 
 const { JSDOM } = requireFromRunDir('jsdom');
 const tick = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -20,75 +20,15 @@ function expect(label, actual, wanted) {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}${ok ? '' : `  (got ${JSON.stringify(actual)}, want ${JSON.stringify(wanted)})`}`);
 }
 
-// --- Simulated XPCOM ---------------------------------------------------------
-function readDefaults() {
-  const defaults = {};
-  vm.runInNewContext(fs.readFileSync(path.join(repoRoot, 'defaults/preferences/prefs.js'), 'utf8'), {
-    pref: (name, value) => {
-      defaults[name.replace('extensions.videospeed.', '')] = value;
-    },
-  });
-  return defaults;
-}
-
+// --- Chrome window ---------------------------------------------------------------
+// The real overlay.js over the simulated XPCOM layer (xpcom.mjs).
 function makeChrome(userPrefs = {}) {
-  const defaults = readDefaults();
-  const user = new Map(Object.entries(userPrefs));
-  const observers = [];
-  const errors = [];
-  const value = (key) => {
-    if (user.has(key)) return user.get(key);
-    if (key in defaults) return defaults[key];
-    throw new Error(`NS_ERROR_UNEXPECTED: no pref ${key}`);
-  };
-  const typed = (type) => (key) => {
-    const v = value(key);
-    if (typeof v !== type) throw new Error(`NS_ERROR_UNEXPECTED: ${key} is not ${type}`);
-    return v;
-  };
-  const write = (key, v) => {
-    const changed = !user.has(key) || user.get(key) !== v;
-    user.set(key, v);
-    if (changed) observers.forEach((o) => o.observe(null, 'nsPref:changed', key));
-  };
-  const branch = {
-    getBoolPref: typed('boolean'),
-    getIntPref: typed('number'),
-    getCharPref: typed('string'),
-    setBoolPref: (k, v) => write(k, !!v),
-    setIntPref: (k, v) => write(k, v | 0),
-    setCharPref: (k, v) => write(k, String(v)),
-    prefHasUserValue: (k) => user.has(k),
-    clearUserPref: (k) => {
-      if (user.delete(k)) observers.forEach((o) => o.observe(null, 'nsPref:changed', k));
-    },
-    addObserver: (prefix, o) => observers.push(o),
-    removeObserver: (prefix, o) => observers.splice(observers.indexOf(o), 1),
-  };
-  const Services = {
-    prefs: { getBranch: () => branch },
-    scriptloader: {
-      loadSubScript(url, scope) {
-        const rel = url.replace('resource://videospeed/', '');
-        vm.runInNewContext(fs.readFileSync(path.join(repoRoot, 'src', rel), 'utf8'), scope);
-      },
-    },
-  };
-  const utils = {
-    import() {},
-    reportError: (e) => errors.push(String(e)),
-    cloneInto: (obj, win) => win.JSON.parse(JSON.stringify(obj)),
-  };
-  const Components = { classes: {}, interfaces: {}, utils };
-
-  const jsm = { Components, Services };
-  vm.createContext(jsm);
-  vm.runInContext(fs.readFileSync(path.join(repoRoot, 'chrome/modules/VSCPrefs.jsm'), 'utf8'), jsm);
-
+  const prefs = makePrefs(userPrefs);
+  const { Components, Services, utils, VSCPrefs } = prefs;
   const button = { attrs: {}, setAttribute(k, v) { this.attrs[k] = v; }, removeAttribute(k) { delete this.attrs[k]; } };
   const gBrowser = { browsers: [], selectedBrowser: null, addEventListener() {}, removeEventListener() {} };
   const overlayCtx = {
-    Components: { ...Components, utils: { ...utils, import() { overlayCtx.VSCPrefs = jsm.VSCPrefs; } } },
+    Components: { ...Components, utils: { ...utils, import() { overlayCtx.VSCPrefs = VSCPrefs; } } },
     Services,
     gBrowser,
     document: { getElementById: (id) => (id === 'videospeed-button' ? button : null) },
@@ -96,7 +36,7 @@ function makeChrome(userPrefs = {}) {
   };
   vm.createContext(overlayCtx);
   vm.runInContext(fs.readFileSync(path.join(repoRoot, 'chrome/content/overlay.js'), 'utf8'), overlayCtx);
-  return { VSCPrefs: jsm.VSCPrefs, overlay: overlayCtx.VideoSpeedOverlay, gBrowser, button, user, errors, branch };
+  return { VSCPrefs, overlay: overlayCtx.VideoSpeedOverlay, gBrowser, button, user: prefs.user, errors: prefs.errors, branch: prefs.branch };
 }
 
 // A content document: jsdom page with a sized, playable <video>. The real

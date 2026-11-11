@@ -67,13 +67,17 @@ var VSCPrefs = {
       catch(e) { settings[key] = ""; }
     });
 
-    // Convert float strings to numbers
+    // Float prefs are strings. "null" is a stored null — chrome.storage keeps
+    // nulls, and an imported settings file can carry one (an exported
+    // lastSpeed is null while rememberSpeed is off). Upstream's load() reads
+    // both keys through Number(), so null and 0 pass through unchanged; only
+    // unparseable text falls back to the default.
+    var floatDefaults = { lastSpeed: 1.0, controllerOpacity: 0.3 };
     this.FLOAT_KEYS.forEach(function(key) {
-      settings[key] = parseFloat(settings[key]) || 0;
+      var value = parseFloat(settings[key]);
+      settings[key] = (settings[key] === "null") ? null
+        : isNaN(value) ? floatDefaults[key] : value;
     });
-    // Ensure sane defaults for floats
-    if (!settings.lastSpeed) settings.lastSpeed = 1.0;
-    if (!settings.controllerOpacity) settings.controllerOpacity = 0.3;
 
     // Parse JSON fields. Heal legacy double-encoded values: a prior
     // content-save bug pre-stringified objects before VSCPrefs.set re-encoded
@@ -98,6 +102,29 @@ var VSCPrefs = {
     });
 
     return settings;
+  },
+
+  /** Every settings key that has a pref. */
+  get KEYS() {
+    return this.BOOL_KEYS.concat(this.INT_KEYS, this.CHAR_KEYS);
+  },
+
+  /**
+   * The settings as chrome.storage would hold them: only keys with a user
+   * value, parsed as getAll() parses them. An untouched pref is absent, as an
+   * unset key is in upstream's storage, so callers fill in their own defaults
+   * (the options page's chrome-storage.js shim).
+   */
+  getStored: function() {
+    var b = this.branch;
+    var all = this.getAll();
+    var stored = {};
+    this.KEYS.forEach(function(key) {
+      if (b.prefHasUserValue(key)) {
+        stored[key] = all[key];
+      }
+    });
+    return stored;
   },
 
   /**
@@ -136,6 +163,17 @@ var VSCPrefs = {
     if (this.branch.prefHasUserValue(key)) {
       this.branch.clearUserPref(key);
     }
+  },
+
+  /**
+   * Drop every user value on the branch — settings, deprecated keys and
+   * anything else — as chrome.storage.sync.clear() empties upstream's storage.
+   */
+  resetAll: function() {
+    var self = this;
+    this.branch.getChildList("", {}).forEach(function(key) {
+      self.reset(key);
+    });
   },
 
   _migrated: false,

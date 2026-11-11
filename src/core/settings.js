@@ -96,12 +96,41 @@ if (!window.VSC.VideoSpeedConfig) {
           await this.save({ keyBindings: this.settings.keyBindings });
         }
 
-        // UXP: blacklist and siteRules are resolved in the privileged chrome
-        // layer (overlay.js): disabled sites are never injected, the legacy
-        // blacklist → siteRules migration runs there, and the page world never
-        // receives the raw rules (privacy). Instead of upstream's
-        // matchSiteRule() call here, the chrome side seeds an already-matched
-        // `siteDefaultSpeed`.
+        // Migrate legacy blacklist → siteRules (one-shot)
+        if (storage.blacklist !== null && storage.blacklist !== undefined && !storage.siteRules) {
+          const regStrip = /^[\r\t\f\v ]+|[\r\t\f\v ]+$/gm;
+          storage.siteRules = storage.blacklist
+            .split('\n')
+            .map((l) => l.replace(regStrip, ''))
+            .filter(Boolean)
+            .map((pattern) => ({ pattern, enabled: false, speed: null }));
+          await this.save({ siteRules: storage.siteRules });
+          // Keep blacklist in storage for backward compat with older extension
+          // versions that may be synced across devices. Harmless dead weight.
+          window.VSC.logger.info('Migrated blacklist to siteRules');
+        } else if (
+          storage.blacklist !== null &&
+          storage.blacklist !== undefined &&
+          storage.siteRules
+        ) {
+          // Both exist — this is the normal state for all migrated users.
+          // blacklist is intentionally kept in storage for sync compat with older
+          // extension versions on other devices (see bridge fix: blacklist is only
+          // checked pre-migration when siteRules is absent).
+          // TODO: remove blacklist from storage once we're confident sync compat
+          // is no longer needed (a few release cycles after siteRules shipped).
+        }
+
+        // Apply siteRules
+        this.settings.siteRules =
+          storage.siteRules || window.VSC.Constants.DEFAULT_SETTINGS.siteRules;
+
+        // UXP: site rules are matched in the privileged chrome layer
+        // (overlay.js): disabled sites are never injected and the page world
+        // never receives the raw rules (privacy) — here siteRules is just the
+        // default. Instead of upstream's matchSiteRule() call, the chrome side
+        // seeds an already-matched `siteDefaultSpeed`. (In the options page,
+        // which reads real storage, siteRules above is the user's.)
         // Reset first: without this, siteDefaultSpeed is sticky across load()
         // calls — invisible in production (fresh process per page load) but a
         // real leak in any long-lived context, and load() below would seed

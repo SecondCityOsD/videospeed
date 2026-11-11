@@ -26,10 +26,15 @@ import { fileURLToPath } from 'node:url';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-const IIFE_OPEN = `// UXP: the fork loads every module as its own classic <script> in page scope;
+const PAGE_WRAP_NOTE = `// UXP: the fork loads every module as its own classic <script> in page scope;
 // upstream gets one esbuild IIFE around the whole bundle. This wrapper keeps
 // top-level bindings out of the page's global lexical scope, where a site
-// script declaring the same name would throw a redeclaration SyntaxError.
+// script declaring the same name would throw a redeclaration SyntaxError.`;
+const OPTIONS_WRAP_NOTE = `// UXP: upstream bundles the options page into one esbuild IIFE; the fork loads
+// its modules as separate classic <script>s. This wrapper keeps top-level
+// bindings out of the shared global scope, where two files declaring the same
+// name (row-renderer's createRow and options.js's copy of it) would collide.`;
+const iifeOpen = (note) => `${note}
 (function () {
 'use strict';
 
@@ -40,7 +45,10 @@ const IIFE_CLOSE = `
 const DEFAULT_ANCHOR = 'window.VSC = window.VSC || {};';
 
 // ---------------------------------------------------------------------------
-// Registry: upstream-relative path → { anchor?, edits: [edit, ...] }
+// Registry: upstream-relative path → { anchor?, edits: [edit, ...], dest?, wrap? }
+//   dest — fork path relative to the repository root (default: src/<path>)
+//   wrap — false for files that get no IIFE (HTML, CSS)
+//   wrapNote — the comment above the IIFE (default: PAGE_WRAP_NOTE)
 // ---------------------------------------------------------------------------
 const PORTS = {
   'core/arbiter.js': {
@@ -412,15 +420,15 @@ if (typeof window.requestIdleCallback === 'undefined') {
   'core/settings.js': {
     edits: [
       {
-        from: '        // Migrate legacy blacklist → siteRules (one-shot)',
+        from: '        // Match current URL against site rules to derive per-site default speed.',
         through:
           '              `Site rule matched: pattern="${matched.pattern}", speed=${matched.speed}`\n            );\n          }\n        }',
-        to: `        // UXP: blacklist and siteRules are resolved in the privileged chrome
-        // layer (overlay.js): disabled sites are never injected, the legacy
-        // blacklist → siteRules migration runs there, and the page world never
-        // receives the raw rules (privacy). Instead of upstream's
-        // matchSiteRule() call here, the chrome side seeds an already-matched
-        // \`siteDefaultSpeed\`.
+        to: `        // UXP: site rules are matched in the privileged chrome layer
+        // (overlay.js): disabled sites are never injected and the page world
+        // never receives the raw rules (privacy) — here siteRules is just the
+        // default. Instead of upstream's matchSiteRule() call, the chrome side
+        // seeds an already-matched \`siteDefaultSpeed\`. (In the options page,
+        // which reads real storage, siteRules above is the user's.)
         // Reset first: without this, siteDefaultSpeed is sticky across load()
         // calls — invisible in production (fresh process per page load) but a
         // real leak in any long-lived context, and load() below would seed
@@ -888,7 +896,8 @@ if (typeof window.requestIdleCallback === 'undefined') {
    * document.adoptedStyleSheets), so controller CSS goes in <style> elements.
    * Same two-sheet split as upstream: _controllerSheet (built-in defaults,
    * domain-preprocessed, never changes at runtime) and _customSheet (user
-   * additions, injected raw, live-updatable).
+   * additions, injected raw, live-updatable). @import rules are removed:
+   * replaceSync() drops them, a <style> element would load them.
    * @param {string} css
    * @param {string} [id]
    * @returns {HTMLStyleElement}
@@ -899,7 +908,7 @@ if (typeof window.requestIdleCallback === 'undefined') {
     if (id) {
       styleEl.id = id;
     }
-    styleEl.textContent = css;
+    styleEl.textContent = window.VSC.stripCSSImports(css);
     (document.head || document.documentElement).appendChild(styleEl);
     return styleEl;
   }
@@ -935,7 +944,7 @@ if (typeof window.requestIdleCallback === 'undefined') {
         if (!this._customSheet) {
           this._customSheet = this._appendStyle(customCSS, 'vsc-controller-custom');
         } else {
-          this._customSheet.textContent = customCSS;
+          this._customSheet.textContent = window.VSC.stripCSSImports(customCSS);
         }
       } else if (this._customSheet) {
         this._customSheet.remove();
@@ -1331,6 +1340,310 @@ if (typeof window.requestIdleCallback === 'undefined') {
       ],
     ],
   },
+
+  // --- Options page: upstream's HTML page, served as chrome-privileged HTML --
+  // (chrome://videospeed/content/options/options.html). Its chrome.storage
+  // calls reach the prefs through chrome/content/options/chrome-storage.js.
+  'ui/options/options.html': {
+    dest: 'chrome/content/options/options.html',
+    wrap: false,
+    edits: [
+      [
+        `    <title>Video Speed Controller: Options</title>
+    <link rel="stylesheet" href="options.css" />
+    <script src="options.js"></script>`,
+        `    <meta charset="utf-8" />
+    <title>Video Speed Controller: Options</title>
+    <link rel="stylesheet" href="options.css" />
+    <!-- UXP: upstream bundles these into one options.js. Load order matters:
+         chrome-storage.js (the chrome.storage shim) must precede
+         storage-manager.js, which picks its backend when it loads. -->
+    <script src="resource://videospeed/utils/key-maps.js"></script>
+    <script src="resource://videospeed/styles/controller-css-defaults.js"></script>
+    <script src="resource://videospeed/utils/constants.js"></script>
+    <script src="resource://videospeed/utils/logger.js"></script>
+    <script src="chrome-storage.js"></script>
+    <script src="resource://videospeed/core/storage-manager.js"></script>
+    <script src="resource://videospeed/core/settings.js"></script>
+    <script src="row-renderer.js"></script>
+    <script src="options.js"></script>`,
+      ],
+      [
+        '<img src="../../assets/icons/icon48.png"',
+        '<img src="chrome://videospeed/skin/icon48.png"',
+      ],
+      // UXP: classes stand in for the static `.row:has(#…)` selectors (see
+      // options.css), which Goanna without :has() would drop.
+      [
+        `        <div class="row">
+          <label
+            >Site rules<br />`,
+        `        <div class="row row-site-rules">
+          <label
+            >Site rules<br />`,
+      ],
+      [
+        `        <div class="row">
+          <label for="controllerCSS"`,
+        `        <div class="row row-css">
+          <label for="controllerCSS"`,
+      ],
+      [
+        '<li><a href="#faq-local">Local files / Incognito</a></li>',
+        '<li><a href="#faq-local">Local files / Private windows</a></li>',
+      ],
+      {
+        // UXP: upstream's answer is Chrome-specific (chrome://extensions).
+        from: '          <h4 id="faq-local">',
+        through: `          </ul>
+
+          <h4 id="faq-disable">`,
+        to: `          <h4 id="faq-local">
+            Do the speed controls work for local videos and in private windows?
+          </h4>
+          <p>
+            Yes. In Pale Moon and Basilisk the extension runs on local files (e.g. File &gt; Open
+            File) and in private windows without any extra permissions.
+          </p>
+
+          <h4 id="faq-disable">`,
+      },
+      [
+        // UXP: upstream's text contradicts its own settings.load() and
+        // speed-resolution tests — a matching site rule wins at page load.
+        `            When <code>rememberSpeed</code> is <strong>on</strong>, the last speed you set is stored
+            and persists across sessions. This stored speed <strong>takes precedence</strong> over
+            site rule defaults. To let a site rule win again, either turn off
+            <code>rememberSpeed</code> or manually reset to 1x.`,
+        `            When <code>rememberSpeed</code> is <strong>on</strong>, the last speed you set is stored
+            and persists across sessions. On a site with a matching rule, the rule's speed is still
+            the starting speed; a speed you choose there takes over for the rest of the page and is
+            remembered for sites without a rule.`,
+      ],
+    ],
+  },
+
+  'ui/options/options.css': {
+    dest: 'chrome/content/options/options.css',
+    wrap: false,
+    edits: [
+      // UXP: the static rows carry classes instead (options.html); Goanna
+      // without :has() would drop these rules and lay the editors out beside
+      // their labels. The dynamic `.row.customs:has(...)` rules stay and
+      // degrade to a slightly wider shortcut row.
+      { every: '.row:has(#site-rules-container)', to: '.row.row-site-rules', count: 2 },
+      { every: '.row:has(#controllerCSS)', to: '.row.row-css', count: 2 },
+      // UXP: Goanna knows only the prefixed property; without it a <select>
+      // shows the native arrow on top of upstream's SVG one.
+      { every: '  appearance: none;\n', to: '  -moz-appearance: none;\n  appearance: none;\n', count: 2 },
+      // UXP: :-moz-focusring is Goanna's :focus-visible. Separate rules, since
+      // an engine missing either pseudo-class drops the whole rule.
+      [
+        `.header-tab:focus-visible {
+  color: var(--md-on-surface);
+}
+`,
+        `.header-tab:focus-visible {
+  color: var(--md-on-surface);
+}
+
+.header-tab:-moz-focusring {
+  color: var(--md-on-surface);
+}
+`,
+      ],
+      [
+        `.removeParent:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--md-primary);
+  outline-offset: 2px;
+}
+`,
+        `.removeParent:focus-visible,
+button:focus-visible {
+  outline: 2px solid var(--md-primary);
+  outline-offset: 2px;
+}
+
+.removeParent:-moz-focusring,
+button:-moz-focusring {
+  outline: 2px solid var(--md-primary);
+  outline-offset: 2px;
+}
+`,
+      ],
+    ],
+  },
+
+  'ui/options/row-renderer.js': {
+    dest: 'chrome/content/options/row-renderer.js',
+    wrapNote: OPTIONS_WRAP_NOTE,
+    anchor: `/**
+ * Create a DOM row element from a column spec and optional initial data.`,
+    edits: [
+      ['export function createRow(', 'function createRow('],
+      [
+        '      el.checked = data[col.key] ?? col.default ?? false;',
+        `      el.checked =
+        data[col.key] != null ? data[col.key] : col.default != null ? col.default : false;`,
+      ],
+      [
+        '      const val = data[col.key] ?? col.default;',
+        '      const val = (data[col.key] != null) ? data[col.key] : col.default;',
+      ],
+      [
+        `  return row;
+}`,
+        `  return row;
+}
+
+// UXP: stands in for upstream's ES module export (options.js reads it).
+window.VSC = window.VSC || {};
+window.VSC.createRow = createRow;`,
+      ],
+    ],
+  },
+
+  'ui/options/options.js': {
+    dest: 'chrome/content/options/options.js',
+    wrapNote: OPTIONS_WRAP_NOTE,
+    edits: [
+      {
+        from: '// Core utilities and constants - must load first',
+        through: "import { createRow } from './row-renderer.js';",
+        to: `// UXP: options.html loads the modules upstream bundles here as <script>
+// tags, before this file: key-maps, controller-css-defaults, constants,
+// logger, chrome-storage (the chrome.storage shim over the prefs),
+// storage-manager, settings and row-renderer.`,
+      },
+      [
+        'let keyBindings = [];',
+        `// UXP: row-renderer.js publishes createRow on window.VSC.
+const { createRow } = window.VSC;
+
+let keyBindings = [];`,
+      ],
+      { every: '} catch {', to: '} catch (e) {', count: 3 },
+      [
+        '  const kc = binding.keyCode ?? binding.key;',
+        '  const kc = (binding.keyCode != null) ? binding.keyCode : binding.key;',
+      ],
+      [
+        '    : layoutMap?.get(e.code) || window.VSC.Constants.displayKeyFromCode(e.code) || e.key;',
+        `    : (layoutMap && layoutMap.get(e.code)) ||
+      window.VSC.Constants.displayKeyFromCode(e.code) ||
+      e.key;`,
+      ],
+      [
+        '  input.keyCode = binding.keyCode ?? binding.key;',
+        '  input.keyCode = (binding.keyCode != null) ? binding.keyCode : binding.key;',
+      ],
+      ['    return s ?? null;', '    return (s != null) ? s : null;'],
+      [
+        "    document.getElementById('controllerCSS').value = storage.customCSS ?? '';",
+        `    document.getElementById('controllerCSS').value =
+      (storage.customCSS != null) ? storage.customCSS : '';`,
+      ],
+      [
+        `  const dropped = [];
+  const probe = new CSSStyleSheet();
+  for (const block of blocks) {
+    try {
+      probe.replaceSync(block);`,
+        `  const dropped = [];
+  for (const block of blocks) {
+    try {
+      const probe = parseStyleSheet(block);`,
+      ],
+      [
+        `    const sheet = new CSSStyleSheet();
+    sheet.replaceSync(css);`,
+        '    const sheet = parseStyleSheet(css);',
+      ],
+      [
+        'function validateControllerCSS(css) {',
+        `// UXP: Pale Moon has no Constructable Stylesheets (new CSSStyleSheet() /
+// replaceSync()). Parse through an inert <style media="not all"> instead and
+// return a snapshot with the \`cssRules\` the validator reads. Like
+// replaceSync(), drop @import rules first — this privileged page must not
+// fetch them either.
+function parseStyleSheet(css) {
+  const style = document.createElement('style');
+  style.media = 'not all';
+  style.textContent = window.VSC.stripCSSImports(css);
+  document.head.appendChild(style);
+  const cssRules = Array.from(style.sheet.cssRules);
+  style.remove();
+  return { cssRules };
+}
+
+function validateControllerCSS(css) {`,
+      ],
+      ['    const text = await file.text();', '    const text = await readFileText(file);'],
+      [
+        `/**
+ * Import settings from a JSON file. Validates structure before applying.
+ */`,
+        `// UXP: Blob.text() is newer than some Goanna builds; FileReader reads the
+// same text everywhere.
+function readFileText(file) {
+  if (typeof file.text === 'function') {
+    return file.text();
+  }
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsText(file);
+  });
+}
+
+/**
+ * Import settings from a JSON file. Validates structure before applying.
+ */`,
+      ],
+      // UXP: the fork's repository (install.rdf homepageURL).
+      [
+        "    window.open('https://github.com/igrigorik/videospeed');",
+        "    window.open('https://github.com/SecondCityOsD/videospeed');",
+      ],
+      [
+        "    window.open('https://github.com/igrigorik/videospeed/issues');",
+        "    window.open('https://github.com/SecondCityOsD/videospeed/issues');",
+      ],
+      [
+        `  document.addEventListener('beforeinput', (event) => {
+    eventCaller(event, 'customValue', inputFilterNumbersOnly);
+  });`,
+        `  document.addEventListener('beforeinput', (event) => {
+    eventCaller(event, 'customValue', inputFilterNumbersOnly);
+  });
+  // UXP: Goanna builds without the beforeinput event get the same filter from
+  // keypress (typed characters) and paste.
+  if (!('onbeforeinput' in document.documentElement)) {
+    const filterInput = (event, inputType, data) => {
+      eventCaller(
+        { target: event.target, inputType, data, preventDefault: () => event.preventDefault() },
+        'customValue',
+        inputFilterNumbersOnly
+      );
+    };
+    document.addEventListener('keypress', (event) => {
+      // Shortcuts (Ctrl+V, Alt+menu keys) insert nothing; AltGr reports
+      // Ctrl+Alt and does type a character.
+      if (event.charCode && !event.metaKey && event.ctrlKey === event.altKey) {
+        filterInput(event, 'insertText', String.fromCharCode(event.charCode));
+      }
+    });
+    document.addEventListener('paste', (event) => {
+      if (event.clipboardData) {
+        filterInput(event, 'insertFromPaste', event.clipboardData.getData('text/plain'));
+      }
+    });
+  }`,
+      ],
+    ],
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -1342,7 +1655,7 @@ if (typeof window.requestIdleCallback === 'undefined') {
 const NATIVE = {
   'ui/shadow-dom.js': 'upstream ui/shadow-dom.js (plain-DOM controller instead of a shadow root)',
   'styles/controller-css-defaults.js':
-    'upstream styles/inject.css + styles/controller-css-defaults.js (no manifest CSS; :has() lists split)',
+    'upstream styles/inject.css + styles/controller-css-defaults.js (no manifest CSS; :has() lists split; stripCSSImports for <style>)',
 };
 
 // ---------------------------------------------------------------------------
@@ -1351,7 +1664,7 @@ const NATIVE = {
  * Apply one registry entry to upstream text. Returns { text, problems }.
  */
 function generate(rel, upstreamText) {
-  const { anchor = DEFAULT_ANCHOR, edits } = PORTS[rel];
+  const { anchor = DEFAULT_ANCHOR, edits, wrap = true, wrapNote = PAGE_WRAP_NOTE } = PORTS[rel];
   const problems = [];
   let text = upstreamText.replace(/\r\n/g, '\n');
   const countOf = (needle) => text.split(needle).length - 1;
@@ -1386,11 +1699,14 @@ function generate(rel, upstreamText) {
     }
     text = text.slice(0, start) + to + text.slice(end);
   }
+  if (!wrap) {
+    return { text, problems };
+  }
   const at = text.indexOf(anchor);
   if (at === -1 || text.indexOf(anchor, at + 1) !== -1) {
     problems.push(`IIFE anchor must occur exactly once: ${anchor}`);
   } else {
-    text = text.slice(0, at) + IIFE_OPEN + text.slice(at).replace(/\n*$/, '\n') + IIFE_CLOSE;
+    text = text.slice(0, at) + iifeOpen(wrapNote) + text.slice(at).replace(/\n*$/, '\n') + IIFE_CLOSE;
   }
   return { text, problems };
 }
@@ -1412,7 +1728,7 @@ function main(argv) {
 
   let failures = 0;
   for (const rel of only.length ? only : Object.keys(PORTS)) {
-    const forkPath = path.join(repoRoot, 'src', rel);
+    const forkPath = path.join(repoRoot, PORTS[rel].dest || path.join('src', rel));
     const { text, problems } = generate(rel, fs.readFileSync(path.join(upstream, rel), 'utf8'));
     if (problems.length) {
       failures++;

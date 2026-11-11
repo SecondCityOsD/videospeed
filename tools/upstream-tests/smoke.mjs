@@ -201,5 +201,44 @@ function expect(label, actual, wanted) {
   window.close();
 }
 
+// --- Custom CSS ---------------------------------------------------------------
+{
+  const { window, errors } = await boot({ enabled: true, logLevel: 2, customCSS: '@import url(https://example.invalid/x.css);\nvsc-controller { top: 3px; }' });
+  const custom = window.document.getElementById('vsc-controller-custom');
+  expect('custom CSS lands without @import (upstream replaceSync drops it)', custom && custom.textContent, '\nvsc-controller { top: 3px; }');
+  window.document.documentElement.dispatchEvent(
+    new window.CustomEvent('VSC_STORAGE_CHANGED', { detail: { customCSS: { newValue: '@import "y.css"; vsc-controller { left: 1px; }' } } })
+  );
+  expect('live custom-CSS updates drop @import too', custom.textContent, ' vsc-controller { left: 1px; }');
+  // [input, expected]: top-level @import statements go, wherever they sit;
+  // strings, comments, blocks and look-alikes stay.
+  const cases = [
+    ['', ''],
+    ['.a{color:red}', '.a{color:red}'],
+    ['@import url(x.css);\n.a{}', '\n.a{}'],
+    ['@IMPORT "x.css" screen;.a{}', '.a{}'],
+    [String.raw`@\69mport url(x);.a{}`, '.a{}'],
+    [String.raw`@\69 mport url(x);.a{}`, '.a{}'],
+    [String.raw`@im\port url(x);.a{}`, '.a{}'],
+    [String.raw`@\6d port url(x);.a{}`, String.raw`@\6d port url(x);.a{}`],
+    ['@import url(a;b.css);.a{}', '.a{}'],
+    ['@import "a;b.css";.a{}', '.a{}'],
+    ['@import url(x) supports((a:b);c);.a{}', '.a{}'],
+    ['@import url(x)', ''],
+    ['@charset "utf-8";@import url(x);@namespace svg url(y);', '@charset "utf-8";@namespace svg url(y);'],
+    ['.a{content:"@import x;"}', '.a{content:"@import x;"}'],
+    ['/* @import url(x); */.a{}', '/* @import url(x); */.a{}'],
+    ['@media screen{@import url(x);}', '@media screen{@import url(x);}'],
+    ['.a{} @import url(late);', '.a{} '],
+    ['@importx url(x);', '@importx url(x);'],
+    ['@import url(x) {}.a{}', '@import url(x) {}.a{}'],
+    ['.a{content:"}"} @import url(x);', '.a{content:"}"} '],
+    ['@foo{} @import url(x); .b{}', '@foo{}  .b{}'],
+  ];
+  expect('stripCSSImports edge cases', cases.filter(([css, want]) => window.VSC.stripCSSImports(css) !== want).map(([css]) => css), []);
+  expect('no page errors with custom CSS', errors, []);
+  window.close();
+}
+
 console.log(failures ? `\n${failures} expectation(s) FAILED` : '\nall expectations passed');
 process.exitCode = failures ? 1 : 0;

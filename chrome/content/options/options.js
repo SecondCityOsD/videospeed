@@ -1,450 +1,1211 @@
 /**
- * Video Speed Controller — Options page (XUL, UXP/chrome context)
- * Has direct access to Components and XPCOM.
+ * Options page - depends on core VSC modules
+ * Import required dependencies that are normally bundled in inject context
  */
 
-Components.utils.import("chrome://videospeed-modules/content/VSCPrefs.jsm");
+// UXP: options.html loads the modules upstream bundles here as <script>
+// tags, before this file: key-maps, controller-css-defaults, constants,
+// logger, chrome-storage (the chrome.storage shim over the prefs),
+// storage-manager, settings and row-renderer.
 
-var XUL_NS = "http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul";
+// Initialize global namespace for options page
+// UXP: upstream bundles the options page into one esbuild IIFE; the fork loads
+// its modules as separate classic <script>s. This wrapper keeps top-level
+// bindings out of the shared global scope, where two files declaring the same
+// name (row-renderer's createRow and options.js's copy of it) would collide.
+(function () {
+'use strict';
 
-var regStrip = /^[\r\t\f\v ]+|[\r\t\f\v ]+$/gm;
+window.VSC = window.VSC || {};
 
-var tcDefaults = {
-  speed: 1.0,
-  displayKeyCode: 86,
-  rememberSpeed: false,
-  audioBoolean: true,
-  startHidden: false,
-  enabled: true,
-  controllerOpacity: 0.3,
-  controllerButtonSize: 14,
-  logLevel: 3,
-  keyBindings: [
-    { action: "display", key: 86, value: 0, force: false, predefined: true },
-    { action: "slower", key: 83, value: 0.1, force: false, predefined: true },
-    { action: "faster", key: 68, value: 0.1, force: false, predefined: true },
-    { action: "rewind", key: 90, value: 10, force: false, predefined: true },
-    { action: "advance", key: 88, value: 10, force: false, predefined: true },
-    { action: "reset", key: 82, value: 1, force: false, predefined: true },
-    { action: "fast", key: 71, value: 1.8, force: false, predefined: true },
-    { action: "mark", key: 77, value: 0, force: false, predefined: true },
-    { action: "jump", key: 74, value: 0, force: false, predefined: true }
-  ]
-};
+// UXP: row-renderer.js publishes createRow on window.VSC.
+const { createRow } = window.VSC;
 
-var keyBindings = [];
-
-var keyCodeAliases = {
-  0: "null", null: "null", undefined: "null",
-  32: "Space", 37: "Left", 38: "Up", 39: "Right", 40: "Down",
-  96: "Num 0", 97: "Num 1", 98: "Num 2", 99: "Num 3",
-  100: "Num 4", 101: "Num 5", 102: "Num 6", 103: "Num 7",
-  104: "Num 8", 105: "Num 9", 106: "Num *", 107: "Num +",
-  109: "Num -", 110: "Num .", 111: "Num /",
-  112: "F1", 113: "F2", 114: "F3", 115: "F4",
-  116: "F5", 117: "F6", 118: "F7", 119: "F8",
-  120: "F9", 121: "F10", 122: "F11", 123: "F12",
-  186: ";", 188: "<", 189: "-", 187: "+",
-  190: ">", 191: "/", 192: "~", 219: "[",
-  220: "\\", 221: "]", 222: "'"
-};
-
-var customActionsNoValues = ["pause", "muted", "mark", "jump", "display"];
+let keyBindings = [];
 
 /**
- * Walk up the DOM to find an ancestor (or self) with a given class.
- * Needed because XUL textbox events may target anonymous inner elements.
+ * Lightweight CSS syntax highlighter for the controller CSS editor.
+ * Returns HTML with spans wrapping comments, selectors, properties,
+ * values, and braces. Designed for the transparent-textarea overlay
+ * pattern — the textarea handles editing, this colors the <pre> behind it.
  */
-function findAncestorWithClass(el, className) {
-  while (el && el !== document) {
-    if (el.classList && el.classList.contains(className)) return el;
-    el = el.parentNode;
+function highlightCSS(text) {
+  const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  // Tokenize: pull out comments first, then process the rest
+  let result = '';
+  let pos = 0;
+
+  while (pos < escaped.length) {
+    // Comments
+    const commentStart = escaped.indexOf('/*', pos);
+    if (commentStart === pos) {
+      const commentEnd = escaped.indexOf('*/', pos + 2);
+      const end = commentEnd === -1 ? escaped.length : commentEnd + 2;
+      result += `<span class="css-comment">${escaped.slice(pos, end)}</span>`;
+      pos = end;
+      continue;
+    }
+
+    // Find next comment to know where to stop
+    const nextComment = commentStart === -1 ? escaped.length : commentStart;
+
+    // Process non-comment chunk
+    const chunk = escaped.slice(pos, nextComment);
+    result += chunk
+      // Braces
+      .replace(/([{}])/g, '<span class="css-brace">$1</span>')
+      // Properties (word-chars before colon, inside a block)
+      .replace(/([\w-]+)\s*(?=:)/g, '<span class="css-property">$1</span>')
+      // Values (after colon, before semicolon or closing brace)
+      .replace(/:\s*([^;{}]+)(;)/g, ': <span class="css-value">$1</span>$2')
+      // Selectors (text before opening brace, not already wrapped)
+      .replace(
+        /([^{}><\n][^{}<>]*?)(\s*<span class="css-brace">\{)/g,
+        '<span class="css-selector">$1</span>$2'
+      );
+
+    pos = nextComment;
   }
-  return null;
+
+  return result;
+}
+
+/** Sync textarea content to the highlighted <pre> overlay */
+function updateCSSHighlight() {
+  const textarea = document.getElementById('controllerCSS');
+  const highlight = document.getElementById('cssHighlight');
+  if (textarea && highlight) {
+    highlight.innerHTML = `${highlightCSS(textarea.value)}\n`;
+  }
+}
+
+/** Sync scroll position between textarea and highlight overlay */
+function syncCSSScroll() {
+  const textarea = document.getElementById('controllerCSS');
+  const highlight = document.getElementById('cssHighlight');
+  if (textarea && highlight) {
+    highlight.scrollTop = textarea.scrollTop;
+    highlight.scrollLeft = textarea.scrollLeft;
+  }
+}
+
+// Action labels — shared by predefined and custom shortcut rows
+const ACTION_OPTIONS = [
+  ['slower', 'Decrease speed'],
+  ['faster', 'Increase speed'],
+  ['rewind', 'Rewind'],
+  ['advance', 'Advance'],
+  ['reset', 'Reset speed'],
+  ['fast', 'Preferred speed'],
+  ['muted', 'Mute'],
+  ['softer', 'Decrease volume'],
+  ['louder', 'Increase volume'],
+  ['pause', 'Pause'],
+  ['mark', 'Set marker'],
+  ['jump', 'Jump to marker'],
+  ['display', 'Show/hide controller'],
+];
+
+// Column spec for shortcut rows (used by createRow)
+const SHORTCUT_COLUMNS = [
+  { key: 'action', type: 'select', className: 'customDo', options: ACTION_OPTIONS },
+  { key: 'keyInput', type: 'text', className: 'customKey', placeholder: 'press a key' },
+  { key: 'value', type: 'text', className: 'customValue', placeholder: 'value (0.10)' },
+];
+
+// Column spec for site rule rows
+const SITE_RULE_COLUMNS = [
+  { key: 'pattern', type: 'text', className: 'rulePattern', placeholder: 'youtube.com or /regex/' },
+  { key: 'disabled', type: 'checkbox', className: 'ruleDisabled', default: false },
+  { key: 'speed', type: 'text', className: 'ruleSpeed', placeholder: '(global)' },
+];
+
+/**
+ * Validate CSS using the browser's own parser.
+ * Updates the textarea border and validation message inline.
+ * @param {string} css - CSS text to validate
+ * @returns {boolean} true if valid (ok to save)
+ */
+/**
+ * Find CSS rule blocks that the browser silently dropped.
+ * Splits CSS into top-level rule blocks and tries each one individually.
+ * @param {string} css - Original CSS text
+ * @param {CSSStyleSheet} parsedSheet - Sheet from replaceSync (for count comparison)
+ * @returns {string[]} Array of rule-block snippets that failed to parse
+ */
+function findDroppedRules(css, parsedSheet) {
+  // Split into top-level blocks by tracking brace depth
+  const blocks = [];
+  let depth = 0;
+  let start = 0;
+  // Strip comments first so braces inside comments don't confuse us
+  const stripped = css.replace(/\/\*[\s\S]*?\*\//g, (m) => ' '.repeat(m.length));
+
+  for (let i = 0; i < stripped.length; i++) {
+    if (stripped[i] === '{') {
+      depth++;
+    } else if (stripped[i] === '}') {
+      depth--;
+      if (depth === 0) {
+        blocks.push(css.substring(start, i + 1).trim());
+        start = i + 1;
+      }
+    }
+  }
+
+  // Unclosed brace: the trailing chunk was never added to blocks
+  if (depth !== 0) {
+    const remainder = css.substring(start).trim();
+    if (remainder) {
+      const selector = remainder.split('{')[0].trim();
+      return [selector || remainder.slice(0, 40)];
+    }
+  }
+
+  // If total block count matches parsed rule count, nothing was dropped
+  if (blocks.length <= parsedSheet.cssRules.length) {
+    return [];
+  }
+
+  // Try each block individually to find which ones fail
+  const dropped = [];
+  for (const block of blocks) {
+    try {
+      const probe = parseStyleSheet(block);
+      if (probe.cssRules.length === 0) {
+        // Extract the selector part for the message
+        const selector = block.split('{')[0].trim();
+        dropped.push(selector || block.slice(0, 40));
+      }
+    } catch (e) {
+      const selector = block.split('{')[0].trim();
+      dropped.push(selector || block.slice(0, 40));
+    }
+  }
+  return dropped;
+}
+
+// UXP: Pale Moon has no Constructable Stylesheets (new CSSStyleSheet() /
+// replaceSync()). Parse through an inert <style media="not all"> instead and
+// return a snapshot with the `cssRules` the validator reads. Like
+// replaceSync(), drop @import rules first — this privileged page must not
+// fetch them either.
+function parseStyleSheet(css) {
+  const style = document.createElement('style');
+  style.media = 'not all';
+  style.textContent = window.VSC.stripCSSImports(css);
+  document.head.appendChild(style);
+  const cssRules = Array.from(style.sheet.cssRules);
+  style.remove();
+  return { cssRules };
+}
+
+function validateControllerCSS(css) {
+  const textarea = document.getElementById('controllerCSS');
+  const msg = document.getElementById('cssValidation');
+  textarea.classList.remove('css-error', 'css-warn');
+  msg.classList.remove('error', 'warn');
+  msg.textContent = '';
+
+  if (!css.trim()) {
+    return true;
+  }
+
+  try {
+    const sheet = parseStyleSheet(css);
+    const count = sheet.cssRules.length;
+
+    if (count === 0) {
+      textarea.classList.add('css-warn');
+      msg.classList.add('warn');
+      msg.textContent = 'No CSS rules parsed — check for syntax errors.';
+      return true;
+    }
+
+    // Find rules that the browser silently dropped
+    const dropped = findDroppedRules(css, sheet);
+    if (dropped.length > 0) {
+      textarea.classList.add('css-warn');
+      msg.classList.add('warn');
+      msg.textContent = `${count} rule${
+        count !== 1 ? 's' : ''
+      } parsed, ${dropped.length} dropped: ${dropped
+        .map((r) => `"${r.slice(0, 40)}${r.length > 40 ? '...' : ''}"`)
+        .join(', ')}`;
+      return true;
+    }
+
+    return true;
+  } catch (e) {
+    textarea.classList.add('css-error');
+    msg.classList.add('error');
+    msg.textContent = `Syntax error: ${e.message.replace(/^Failed to execute.*: /, '')}`;
+    return false;
+  }
+}
+
+// TODO(v3): Remove keyCodeAliases once all bindings have displayKey field
+// and the legacy `key` integer field is dropped from the schema.
+const keyCodeAliases = {
+  0: 'null',
+  null: 'null',
+  undefined: 'null',
+  32: 'Space',
+  37: 'Left',
+  38: 'Up',
+  39: 'Right',
+  40: 'Down',
+  96: 'Num 0',
+  97: 'Num 1',
+  98: 'Num 2',
+  99: 'Num 3',
+  100: 'Num 4',
+  101: 'Num 5',
+  102: 'Num 6',
+  103: 'Num 7',
+  104: 'Num 8',
+  105: 'Num 9',
+  106: 'Num *',
+  107: 'Num +',
+  109: 'Num -',
+  110: 'Num .',
+  111: 'Num /',
+  112: 'F1',
+  113: 'F2',
+  114: 'F3',
+  115: 'F4',
+  116: 'F5',
+  117: 'F6',
+  118: 'F7',
+  119: 'F8',
+  120: 'F9',
+  121: 'F10',
+  122: 'F11',
+  123: 'F12',
+  124: 'F13',
+  125: 'F14',
+  126: 'F15',
+  127: 'F16',
+  128: 'F17',
+  129: 'F18',
+  130: 'F19',
+  131: 'F20',
+  132: 'F21',
+  133: 'F22',
+  134: 'F23',
+  135: 'F24',
+  186: ';',
+  188: '<',
+  189: '-',
+  187: '+',
+  190: '>',
+  191: '/',
+  192: '~',
+  219: '[',
+  220: '\\',
+  221: ']',
+  222: "'",
+};
+
+// Keyboard layout map — resolved once on page load, used for display labels
+let layoutMap = null;
+(async function initLayoutMap() {
+  try {
+    if (navigator.keyboard && navigator.keyboard.getLayoutMap) {
+      layoutMap = await navigator.keyboard.getLayoutMap();
+      // Re-render display labels if layout changes mid-session
+      navigator.keyboard.addEventListener('layoutchange', async () => {
+        layoutMap = await navigator.keyboard.getLayoutMap();
+      });
+    }
+  } catch (e) {
+    // getLayoutMap not available — fallback chain handles it
+  }
+})();
+
+/**
+ * Build a display string for a shortcut.
+ * @param {string} displayKey - event.key captured at recording time
+ * @param {Object} [modifiers] - {ctrl, alt, shift, meta} booleans
+ * @returns {string} e.g., "Ctrl + S", "Shift + P", "F10"
+ */
+function formatShortcutDisplay(displayKey, modifiers) {
+  if (!displayKey) {
+    return 'null';
+  }
+  const parts = [];
+  if (modifiers) {
+    if (modifiers.ctrl) {
+      parts.push('Ctrl');
+    }
+    if (modifiers.alt) {
+      parts.push('Alt');
+    }
+    if (modifiers.shift) {
+      parts.push('Shift');
+    }
+    if (modifiers.meta) {
+      parts.push('Meta');
+    }
+  }
+  // Capitalize single-character keys for display
+  const label = displayKey.length === 1 ? displayKey.toUpperCase() : displayKey;
+  parts.push(label);
+  return parts.join(' + ');
+}
+
+/**
+ * Resolve the best display label for a binding.
+ * Fallback chain: layoutMap → displayKey → keyCodeAliases → code → "null"
+ */
+function resolveDisplayLabel(binding) {
+  // Try layout map first (most accurate for current keyboard)
+  if (layoutMap && binding.code) {
+    const mapped = layoutMap.get(binding.code);
+    if (mapped) {
+      return formatShortcutDisplay(mapped, binding.modifiers);
+    }
+  }
+  // v2 binding with displayKey
+  if (binding.displayKey) {
+    return formatShortcutDisplay(binding.displayKey, binding.modifiers);
+  }
+  // v2 binding with code but no displayKey
+  if (binding.code) {
+    const derived = window.VSC.Constants.displayKeyFromCode(binding.code);
+    return formatShortcutDisplay(derived, binding.modifiers);
+  }
+  // Legacy v1 binding — fall back to keyCodeAliases
+  const kc = (binding.keyCode != null) ? binding.keyCode : binding.key;
+  return keyCodeAliases[kc] || (kc >= 48 && kc <= 90 ? String.fromCharCode(kc) : `Key ${kc}`);
+}
+
+/**
+ * Auto-size a key input to fit chord labels like "Ctrl + Shift + S".
+ * Falls back to 75px minimum for simple keys.
+ */
+function autoSizeKeyInput(input) {
+  const minWidth = 75;
+  if (!input.value || input.value.length <= 3) {
+    input.style.width = `${minWidth}px`;
+    return;
+  }
+  const span = document.createElement('span');
+  span.style.visibility = 'hidden';
+  span.style.position = 'absolute';
+  span.style.font = getComputedStyle(input).font;
+  span.style.whiteSpace = 'nowrap';
+  span.textContent = input.value;
+  document.body.appendChild(span);
+  const textWidth = span.offsetWidth;
+  document.body.removeChild(span);
+  input.style.width = `${Math.max(minWidth, textWidth + 26)}px`;
 }
 
 function recordKeyPress(e) {
-  var target = findAncestorWithClass(e.target, "customKey") || e.target;
-  if (
-    (e.keyCode >= 48 && e.keyCode <= 57) ||
-    (e.keyCode >= 65 && e.keyCode <= 90) ||
-    keyCodeAliases[e.keyCode]
-  ) {
-    target.value = keyCodeAliases[e.keyCode] || String.fromCharCode(e.keyCode);
-    target.keyCode = e.keyCode;
+  // Special handling for backspace and escape (via event.code)
+  if (e.code === 'Backspace') {
+    e.target.value = '';
+    e.target.code = null;
+    e.target.keyCode = null;
+    e.target.displayKey = null;
+    e.target.modifiers = undefined;
     e.preventDefault();
     e.stopPropagation();
-  } else if (e.keyCode === 8) {
-    target.value = "";
-  } else if (e.keyCode === 27) {
-    target.value = "null";
-    target.keyCode = null;
+    return;
+  } else if (e.code === 'Escape') {
+    e.target.value = 'null';
+    e.target.code = null;
+    e.target.keyCode = null;
+    e.target.displayKey = null;
+    e.target.modifiers = undefined;
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
+
+  // Block blacklisted codes
+  if (window.VSC.Constants.BLACKLISTED_CODES.has(e.code)) {
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
+
+  // Capture v2 identity
+  e.target.code = e.code;
+  e.target.keyCode = e.keyCode;
+
+  // Display: use the layout map when available — it shows the actual character
+  // printed on the key for the user's current keyboard layout (e.g. "z" for the
+  // KeyW physical key on AZERTY). Fall back to displayKeyFromCode for Numpad keys
+  // where the layout map returns the same value as the main keyboard (both Enter
+  // and NumpadEnter map to "Enter" in the layout map, so we need the explicit
+  // "Num Enter" label from displayKeyFromCode to keep them visually distinct).
+  const isNumpad = e.code.startsWith('Numpad');
+  e.target.displayKey = isNumpad
+    ? window.VSC.Constants.displayKeyFromCode(e.code) || e.key
+    : (layoutMap && layoutMap.get(e.code)) ||
+      window.VSC.Constants.displayKeyFromCode(e.code) ||
+      e.key;
+
+  // Capture modifiers — only store object if any modifier is active
+  const hasMod = e.ctrlKey || e.altKey || e.shiftKey || e.metaKey;
+  e.target.modifiers = hasMod
+    ? {
+        ctrl: e.ctrlKey,
+        alt: e.altKey,
+        shift: e.shiftKey,
+        meta: e.metaKey,
+      }
+    : undefined;
+
+  // Display formatted shortcut
+  e.target.value = formatShortcutDisplay(e.target.displayKey, e.target.modifiers);
+  autoSizeKeyInput(e.target);
+
+  // Show contextual warnings for problematic modifier combos
+  clearWarning(e.target);
+  if (e.ctrlKey && e.altKey) {
+    showWarning(
+      e.target,
+      'This combination may conflict with AltGr input on some keyboard layouts.'
+    );
+  } else if (e.metaKey) {
+    showWarning(e.target, 'Some Cmd/Meta combinations are intercepted by the OS and may not work.');
+  }
+
+  e.preventDefault();
+  e.stopPropagation();
+}
+
+function showWarning(input, message) {
+  clearWarning(input);
+  const warn = document.createElement('span');
+  warn.className = 'shortcut-warning';
+  warn.textContent = message;
+  warn.style.cssText = 'display:block;color:#c57600;font-size:11px;margin-top:2px;';
+  input.parentNode.insertBefore(warn, input.nextSibling);
+}
+
+function clearWarning(input) {
+  const existing = input.parentNode.querySelector('.shortcut-warning');
+  if (existing) {
+    existing.remove();
   }
 }
 
 function inputFilterNumbersOnly(e) {
-  var target = findAncestorWithClass(e.target, "customValue") || e.target;
-  var char = String.fromCharCode(e.keyCode);
-  if (!/[\d\.]$/.test(char) || !/^\d+(\.\d*)?$/.test(target.value + char)) {
-    e.preventDefault();
-    e.stopPropagation();
+  if ((e.inputType === 'insertText' || e.inputType === 'insertFromPaste') && e.data) {
+    if (!/^\d+(\.\d*)?$/.test(e.target.value + e.data)) {
+      e.preventDefault();
+    }
   }
 }
 
 function inputFocus(e) {
-  var target = findAncestorWithClass(e.target, "customKey") || e.target;
-  target.value = "";
+  e.target.value = '';
 }
 
 function inputBlur(e) {
-  var target = findAncestorWithClass(e.target, "customKey") || e.target;
-  target.value = keyCodeAliases[target.keyCode] || String.fromCharCode(target.keyCode);
+  // Reconstruct display from stored v2 fields, falling back to legacy
+  if (e.target.code) {
+    e.target.value = formatShortcutDisplay(
+      e.target.displayKey || window.VSC.Constants.displayKeyFromCode(e.target.code),
+      e.target.modifiers
+    );
+  } else if (e.target.code === null) {
+    e.target.value = 'null';
+  } else {
+    // Legacy fallback
+    const kc = e.target.keyCode;
+    e.target.value =
+      keyCodeAliases[kc] || (kc >= 48 && kc <= 90 ? String.fromCharCode(kc) : `Key ${kc}`);
+  }
+  autoSizeKeyInput(e.target);
 }
 
-function updateCustomShortcutInputText(inputItem, keyCode) {
-  inputItem.value = keyCodeAliases[keyCode] || String.fromCharCode(keyCode);
-  inputItem.keyCode = keyCode;
+/**
+ * Populate a shortcut input element with binding data.
+ * Sets all v2 fields on the DOM element for round-trip through createKeyBindings.
+ */
+function setShortcutInput(input, binding) {
+  input.code = binding.code;
+  input.keyCode = (binding.keyCode != null) ? binding.keyCode : binding.key;
+  input.displayKey = binding.displayKey;
+  input.modifiers = binding.modifiers;
+  input.value = resolveDisplayLabel(binding);
+  autoSizeKeyInput(input);
 }
 
-function add_shortcut() {
-  var hbox = document.createElementNS(XUL_NS, "hbox");
-  hbox.setAttribute("class", "customs shortcut-row");
-  hbox.setAttribute("align", "center");
-
-  // Action menulist
-  var menulist = document.createElementNS(XUL_NS, "menulist");
-  menulist.setAttribute("class", "customDo");
-  var menupopup = document.createElementNS(XUL_NS, "menupopup");
-  var actions = [
-    { label: "Decrease speed", value: "slower" },
-    { label: "Increase speed", value: "faster" },
-    { label: "Rewind", value: "rewind" },
-    { label: "Advance", value: "advance" },
-    { label: "Reset speed", value: "reset" },
-    { label: "Preferred speed", value: "fast" },
-    { label: "Mute", value: "muted" },
-    { label: "Decrease volume", value: "softer" },
-    { label: "Increase volume", value: "louder" },
-    { label: "Pause", value: "pause" },
-    { label: "Set marker", value: "mark" },
-    { label: "Jump to marker", value: "jump" },
-    { label: "Show/hide controller", value: "display" }
-  ];
-  actions.forEach(function(a) {
-    var item = document.createElementNS(XUL_NS, "menuitem");
-    item.setAttribute("label", a.label);
-    item.setAttribute("value", a.value);
-    menupopup.appendChild(item);
+/**
+ * Add a shortcut row (custom, not predefined).
+ * @param {Object} [data] - Optional initial data { action, value }
+ * @returns {HTMLElement} The created row
+ */
+function add_shortcut(data = {}) {
+  const container = document.getElementById('shortcuts-container');
+  const row = createRow(container, SHORTCUT_COLUMNS, data, {
+    className: 'customs',
+    removable: true,
   });
-  menulist.appendChild(menupopup);
-  hbox.appendChild(menulist);
+  // Hide value input for actions that don't need values
+  const action = data.action || row.querySelector('.customDo').value;
+  if (window.VSC.Constants.CUSTOM_ACTIONS_NO_VALUES.includes(action)) {
+    row.querySelector('.customValue').style.display = 'none';
+  }
+  return row;
+}
 
-  // Key textbox
-  var keyBox = document.createElementNS(XUL_NS, "textbox");
-  keyBox.setAttribute("class", "customKey");
-  keyBox.setAttribute("placeholder", "press a key");
-  keyBox.setAttribute("size", "8");
-  hbox.appendChild(keyBox);
-
-  // Value textbox
-  var valBox = document.createElementNS(XUL_NS, "textbox");
-  valBox.setAttribute("class", "customValue");
-  valBox.setAttribute("placeholder", "value (0.10)");
-  valBox.setAttribute("size", "8");
-  hbox.appendChild(valBox);
-
-  // Force menulist (hidden by default)
-  var forceList = document.createElementNS(XUL_NS, "menulist");
-  forceList.setAttribute("class", "customForce");
-  forceList.hidden = true;
-  var forcePop = document.createElementNS(XUL_NS, "menupopup");
-  [
-    { label: "Do not disable website key bindings", value: "false" },
-    { label: "Disable website key bindings", value: "true" }
-  ].forEach(function(a) {
-    var item = document.createElementNS(XUL_NS, "menuitem");
-    item.setAttribute("label", a.label);
-    item.setAttribute("value", a.value);
-    forcePop.appendChild(item);
-  });
-  forceList.appendChild(forcePop);
-  hbox.appendChild(forceList);
-
-  // Remove button
-  var removeBtn = document.createElementNS(XUL_NS, "button");
-  removeBtn.setAttribute("class", "removeParent");
-  removeBtn.setAttribute("label", "X");
-  hbox.appendChild(removeBtn);
-
-  document.getElementById("shortcut-rows").appendChild(hbox);
+/**
+ * Add a predefined shortcut row (fixed action, no remove button).
+ * @param {Object} data - Binding data { action, value, ... }
+ * @returns {HTMLElement} The created row
+ */
+function add_predefined_shortcut(data) {
+  const container = document.getElementById('shortcuts-container');
+  const row = createRow(
+    container,
+    SHORTCUT_COLUMNS,
+    { action: data.action },
+    {
+      className: 'customs',
+      id: data.action,
+      removable: false,
+    }
+  );
+  // Predefined rows: lock the action dropdown
+  const select = row.querySelector('.customDo');
+  select.disabled = true;
+  // Set key input
+  setShortcutInput(row.querySelector('.customKey'), data);
+  // Set value input
+  const valueInput = row.querySelector('.customValue');
+  valueInput.value = data.value;
+  // Hide value input for actions that don't need values
+  if (window.VSC.Constants.CUSTOM_ACTIONS_NO_VALUES.includes(data.action)) {
+    valueInput.style.display = 'none';
+  }
+  return row;
 }
 
 function createKeyBindings(item) {
-  var action = item.querySelector(".customDo").value;
-  var key = item.querySelector(".customKey").keyCode;
-  var value = Number(item.querySelector(".customValue").value);
-  var force = item.querySelector(".customForce").value;
-  var predefined = !!item.id;
-  keyBindings.push({
-    action: action, key: key, value: value, force: force, predefined: predefined
-  });
+  const action = item.querySelector('.customDo').value;
+  const input = item.querySelector('.customKey');
+  const value = Number(item.querySelector('.customValue').value);
+  const predefined = !!item.id;
+
+  const binding = {
+    action: action,
+    code: input.code, // PRIMARY — event.code string
+    key: input.keyCode, // OLD field name — integer, downgrade compat
+    keyCode: input.keyCode, // NEW field name — canonical legacy integer
+    displayKey: input.displayKey, // display-friendly from event.key
+    value: value,
+    predefined: predefined,
+  };
+
+  // Only include modifiers when at least one is true
+  if (input.modifiers) {
+    binding.modifiers = input.modifiers;
+  }
+
+  keyBindings.push(binding);
 }
 
-function validate() {
-  var valid = true;
-  var status = document.getElementById("status");
-  var blacklist = document.getElementById("blacklist");
+// --- Site rule helpers ---
 
-  blacklist.value.split("\n").forEach(function(match) {
-    match = match.replace(regStrip, "");
-    if (match.startsWith("/")) {
+/**
+ * Add a site rule row to the container.
+ * @param {Object} [data] - { pattern, enabled, speed }
+ * @returns {HTMLElement}
+ */
+function add_site_rule(data = { enabled: true }) {
+  const container = document.getElementById('site-rules-container');
+  const speedDisplay = data.speed !== null && data.speed !== undefined ? data.speed : undefined;
+  return createRow(
+    container,
+    SITE_RULE_COLUMNS,
+    { pattern: data.pattern, disabled: !data.enabled, speed: speedDisplay },
+    { className: 'site-rule', removable: true }
+  );
+}
+
+/**
+ * Parse a speed input string.
+ * Returns the numeric value, or null if empty/invalid.
+ */
+function parseSpeed(s) {
+  if (typeof s !== 'string') {
+    return (s != null) ? s : null;
+  }
+  const trimmed = s.trim();
+  if (trimmed === '') {
+    return null;
+  }
+  const v = parseFloat(trimmed);
+  return isNaN(v) ? null : v;
+}
+
+/**
+ * Collect site rules from the DOM.
+ * @returns {Array<{pattern: string, enabled: boolean, speed: number|null}>}
+ */
+function collectSiteRules() {
+  const container = document.getElementById('site-rules-container');
+  return Array.from(container.querySelectorAll('.row.site-rule'))
+    .map((row) => ({
+      pattern: row.querySelector('.rulePattern').value.trim(),
+      enabled: !row.querySelector('.ruleDisabled').checked,
+      speed: parseSpeed(row.querySelector('.ruleSpeed').value),
+    }))
+    .filter((r) => r.pattern);
+}
+
+// Validates settings before saving
+function validate() {
+  let valid = true;
+  const status = document.getElementById('status');
+
+  // Clear any existing timeout for validation errors
+  if (window.validationTimeout) {
+    clearTimeout(window.validationTimeout);
+  }
+
+  const regEndsWithFlags = window.VSC.Constants.regEndsWithFlags;
+
+  // Validate site rules
+  const rules = collectSiteRules();
+  for (const rule of rules) {
+    // Validate regex patterns
+    if (rule.pattern.startsWith('/')) {
       try {
-        var parts = match.split("/");
-        if (parts.length < 3) throw "invalid regex";
-        var flags = parts.pop();
-        var regex = parts.slice(1).join("/");
+        const parts = rule.pattern.split('/');
+        if (parts.length < 3) {
+          throw 'invalid regex';
+        }
+        const hasFlags = regEndsWithFlags.test(rule.pattern);
+        const flags = hasFlags ? parts.pop() : '';
+        const regex = parts.slice(1, hasFlags ? undefined : -1).join('/');
+        if (!regex) {
+          throw 'empty regex';
+        }
         new RegExp(regex, flags);
-      } catch(err) {
-        status.setAttribute("value",
-          'Error: Invalid blacklist regex: "' + match + '". Unable to save.');
+      } catch (e) {
+        status.textContent = `Error: Invalid site rule regex: "${rule.pattern}". Unable to save.`;
+        status.classList.add('show', 'error');
         valid = false;
+        window.validationTimeout = setTimeout(() => {
+          status.textContent = '';
+          status.classList.remove('show', 'error');
+        }, 5000);
+        return valid;
       }
     }
-  });
+
+    // Validate speed range
+    if (rule.speed !== null && rule.speed !== undefined) {
+      if (
+        rule.speed < window.VSC.Constants.SPEED_LIMITS.MIN ||
+        rule.speed > window.VSC.Constants.SPEED_LIMITS.MAX
+      ) {
+        status.textContent = `Error: Speed for "${rule.pattern}" must be between ${
+          window.VSC.Constants.SPEED_LIMITS.MIN
+        } and ${window.VSC.Constants.SPEED_LIMITS.MAX}.`;
+        status.classList.add('show', 'error');
+        valid = false;
+        window.validationTimeout = setTimeout(() => {
+          status.textContent = '';
+          status.classList.remove('show', 'error');
+        }, 5000);
+        return valid;
+      }
+    }
+  }
+
   return valid;
 }
 
-// The "disabled sites" box edits the site rules that disable a site
-// (enabled: false); until the options page grows upstream's full site-rules
-// editor, rules that only set a speed are kept as they are, and a listed
-// pattern keeps any speed its rule already had.
-function disabledSitePatterns(storage) {
-  if (!storage.siteRules) return storage.blacklist || "";
-  return storage.siteRules
-    .filter(function(rule) { return rule.enabled === false; })
-    .map(function(rule) { return rule.pattern; })
-    .join("\n");
-}
-
-function disabledSitesToRules(text) {
-  var existing = VSCPrefs.getAll().siteRules || [];
-  var patterns = text.split("\n")
-    .map(function(line) { return line.replace(regStrip, ""); })
-    .filter(Boolean);
-  var rules = patterns.map(function(pattern) {
-    var prior = existing.find(function(rule) { return rule.pattern === pattern; });
-    return { pattern: pattern, enabled: false, speed: prior ? prior.speed : null };
-  });
-  existing.forEach(function(rule) {
-    if (rule.enabled !== false && patterns.indexOf(rule.pattern) === -1) {
-      rules.push(rule);
-    }
-  });
-  return rules;
-}
-
-function save_options() {
-  if (validate() === false) return;
-
-  keyBindings = [];
-  var customs = document.querySelectorAll(".customs");
-  Array.prototype.forEach.call(customs, function(item) {
-    createKeyBindings(item);
-  });
-
-  VSCPrefs.setMultiple({
-    rememberSpeed: document.getElementById("rememberSpeed").checked,
-    audioBoolean: document.getElementById("audioBoolean").checked,
-    enabled: document.getElementById("enabled").checked,
-    startHidden: document.getElementById("startHidden").checked,
-    controllerOpacity: document.getElementById("controllerOpacity").value,
-    controllerButtonSize: document.getElementById("controllerButtonSize").value,
-    logLevel: document.getElementById("logLevel").value,
-    keyBindings: keyBindings,
-    siteRules: disabledSitesToRules(document.getElementById("blacklist").value)
-  });
-
-  var status = document.getElementById("status");
-  status.setAttribute("value", "Options saved");
-  setTimeout(function() { status.setAttribute("value", ""); }, 1000);
-}
-
-function restore_options() {
-  var storage = VSCPrefs.getAll();
-
-  document.getElementById("rememberSpeed").checked = storage.rememberSpeed;
-  document.getElementById("audioBoolean").checked = storage.audioBoolean;
-  document.getElementById("enabled").checked = storage.enabled;
-  document.getElementById("startHidden").checked = storage.startHidden;
-  document.getElementById("controllerOpacity").value = storage.controllerOpacity;
-  document.getElementById("controllerButtonSize").value = storage.controllerButtonSize;
-  document.getElementById("logLevel").value = storage.logLevel;
-  document.getElementById("blacklist").value = disabledSitePatterns(storage);
-
-  var bindings = storage.keyBindings || [];
-  if (!bindings.some(function(x) { return x.action === "display"; })) {
-    bindings.push({
-      action: "display", key: storage.displayKeyCode || 86,
-      value: 0, force: false, predefined: true
-    });
+// Saves options using VideoSpeedConfig system
+async function save_options() {
+  if (validate() === false) {
+    return;
   }
 
-  for (var i = 0; i < bindings.length; i++) {
-    var item = bindings[i];
-    if (item.predefined) {
-      if (item.action === "display" && typeof item.key === "undefined") {
-        item.key = storage.displayKeyCode || tcDefaults.displayKeyCode;
-      }
-      if (customActionsNoValues.indexOf(item.action) !== -1) {
-        document.querySelector("#" + item.action + " .customValue").disabled = true;
-      }
-      updateCustomShortcutInputText(
-        document.querySelector("#" + item.action + " .customKey"),
-        item.key
-      );
-      document.querySelector("#" + item.action + " .customValue").value = item.value;
-      document.querySelector("#" + item.action + " .customForce").value = item.force;
-    } else {
-      add_shortcut();
-      var dom = document.querySelector("#shortcut-rows > .customs:last-child");
-      dom.querySelector(".customDo").value = item.action;
-      if (customActionsNoValues.indexOf(item.action) !== -1) {
-        dom.querySelector(".customValue").disabled = true;
-      }
-      updateCustomShortcutInputText(dom.querySelector(".customKey"), item.key);
-      dom.querySelector(".customValue").value = item.value;
-      dom.querySelector(".customForce").value = item.force;
-    }
-  }
-}
+  const status = document.getElementById('status');
+  status.textContent = '';
+  status.classList.remove('show', 'success', 'error');
 
-function restore_defaults() {
-  VSCPrefs.setMultiple({
-    rememberSpeed: tcDefaults.rememberSpeed,
-    audioBoolean: tcDefaults.audioBoolean,
-    enabled: tcDefaults.enabled,
-    startHidden: tcDefaults.startHidden,
-    controllerOpacity: tcDefaults.controllerOpacity,
-    controllerButtonSize: tcDefaults.controllerButtonSize,
-    logLevel: tcDefaults.logLevel,
-    keyBindings: tcDefaults.keyBindings
-  });
-  // Back to the shipped defaults (defaults/preferences/prefs.js).
-  ["siteRules", "blacklist", "exclusiveKeys", "customCSS"].forEach(function(key) {
-    VSCPrefs.reset(key);
-  });
+  try {
+    keyBindings = [];
+    Array.from(document.querySelectorAll('.customs')).forEach((item) => createKeyBindings(item));
 
-  // Remove dynamically-added shortcuts before restoring
-  var removes = document.querySelectorAll(".removeParent");
-  Array.prototype.forEach.call(removes, function(button) {
-    button.parentNode.parentNode.removeChild(button.parentNode);
-  });
+    const rememberSpeed = document.getElementById('rememberSpeed').checked;
+    const exclusiveKeys = document.getElementById('exclusiveKeys').checked;
+    const audioBoolean = document.getElementById('audioBoolean').checked;
+    const startHidden = document.getElementById('startHidden').checked;
+    const controllerOpacity = Number(document.getElementById('controllerOpacity').value);
+    const controllerButtonSize = Number(document.getElementById('controllerButtonSize').value);
+    const logLevel = parseInt(document.getElementById('logLevel').value);
+    const siteRules = collectSiteRules();
+    const customCSS = document.getElementById('controllerCSS').value;
 
-  restore_options();
-
-  var status = document.getElementById("status");
-  status.setAttribute("value", "Default options restored");
-  setTimeout(function() { status.setAttribute("value", ""); }, 1000);
-}
-
-function show_experimental() {
-  var button = document.getElementById("experimental");
-
-  // Show the customForce selects in shortcut rows
-  var forceElements = document.querySelectorAll(".customForce");
-  Array.prototype.forEach.call(forceElements, function(item) {
-    item.hidden = false;
-  });
-
-  // Show the advanced settings container
-  var advanced = document.getElementById("advanced-settings");
-  if (advanced) advanced.hidden = false;
-
-  button.setAttribute("label", "Advanced features enabled");
-  button.disabled = true;
-}
-
-window.addEventListener("load", function() {
-  restore_options();
-
-  document.getElementById("save").addEventListener("command", save_options);
-  document.getElementById("add").addEventListener("command", add_shortcut);
-  document.getElementById("restore").addEventListener("command", restore_defaults);
-  document.getElementById("experimental").addEventListener("command", show_experimental);
-
-  function openInTab(url) {
-    var mainWindow = Components.classes["@mozilla.org/appshell/window-mediator;1"]
-      .getService(Components.interfaces.nsIWindowMediator)
-      .getMostRecentWindow("navigator:browser");
-    if (mainWindow && mainWindow.gBrowser) {
-      mainWindow.gBrowser.selectedTab = mainWindow.gBrowser.addTab(url);
-    }
-  }
-
-  document.getElementById("about").addEventListener("command", function() {
-    openInTab("https://github.com/SecondCityOsD/videospeed");
-  });
-
-  document.getElementById("feedback").addEventListener("command", function() {
-    openInTab("https://github.com/SecondCityOsD/videospeed/issues");
-  });
-
-  // Event delegation for dynamic shortcut rows
-  document.addEventListener("keypress", function(event) {
-    var target = findAncestorWithClass(event.target, "customValue");
-    if (target) {
-      var char = String.fromCharCode(event.keyCode);
-      if (!/[\d\.]$/.test(char) || !/^\d+(\.\d*)?$/.test(target.value + char)) {
-        event.preventDefault();
-        event.stopPropagation();
-      }
-    }
-  });
-
-  document.addEventListener("focus", function(event) {
-    var target = findAncestorWithClass(event.target, "customKey");
-    if (target) target.value = "";
-  }, true);
-
-  document.addEventListener("blur", function(event) {
-    var target = findAncestorWithClass(event.target, "customKey");
-    if (target) {
-      target.value = keyCodeAliases[target.keyCode] || String.fromCharCode(target.keyCode);
-    }
-  }, true);
-
-  document.addEventListener("keydown", function(event) {
-    var target = findAncestorWithClass(event.target, "customKey");
-    if (target) {
-      recordKeyPress({
-        target: target,
-        keyCode: event.keyCode,
-        preventDefault: function() { event.preventDefault(); },
-        stopPropagation: function() { event.stopPropagation(); }
-      });
-    }
-  });
-
-  document.addEventListener("command", function(event) {
-    // Remove button clicked
-    if (event.target.classList && event.target.classList.contains("removeParent")) {
-      event.target.parentNode.parentNode.removeChild(event.target.parentNode);
+    // Validate CSS syntax — block save on parse error
+    if (!validateControllerCSS(customCSS)) {
+      status.textContent = 'Error: Controller CSS has syntax errors. Fix them before saving.';
+      status.classList.add('show', 'error');
+      setTimeout(() => {
+        status.textContent = '';
+        status.classList.remove('show', 'error');
+      }, 5000);
       return;
     }
 
-    // Action menulist changed — enable/disable value input
-    var menulist = findAncestorWithClass(event.target, "customDo");
-    if (menulist) {
-      var row = findAncestorWithClass(menulist, "customs");
-      if (row) {
-        var valueBox = row.querySelector(".customValue");
-        if (customActionsNoValues.indexOf(menulist.value) !== -1) {
-          valueBox.disabled = true;
-          valueBox.value = 0;
-        } else {
-          valueBox.disabled = false;
-        }
+    // Byte-length guard for chrome.storage.sync (8KB per-item limit)
+    const cssByteSize = new Blob([customCSS]).size;
+    if (cssByteSize > 8192) {
+      status.textContent = `Error: Controller CSS exceeds 8KB storage limit (${Math.round(cssByteSize / 1024)}KB). Reduce CSS size.`;
+      status.classList.add('show', 'error');
+      setTimeout(() => {
+        status.textContent = '';
+        status.classList.remove('show', 'error');
+      }, 5000);
+      return;
+    }
+
+    // Ensure VideoSpeedConfig singleton is initialized
+    if (!window.VSC.videoSpeedConfig) {
+      window.VSC.videoSpeedConfig = new window.VSC.VideoSpeedConfig();
+    }
+
+    // Use VideoSpeedConfig to save settings (sync storage)
+    const settingsToSave = {
+      rememberSpeed: rememberSpeed,
+      exclusiveKeys: exclusiveKeys,
+      audioBoolean: audioBoolean,
+      startHidden: startHidden,
+      controllerOpacity: controllerOpacity,
+      controllerButtonSize: controllerButtonSize,
+      logLevel: logLevel,
+      keyBindings: keyBindings,
+      siteRules: siteRules,
+    };
+
+    settingsToSave.customCSS = customCSS;
+
+    const ok = await window.VSC.videoSpeedConfig.save(settingsToSave);
+
+    if (!ok) {
+      status.textContent = 'Error: failed to save options to storage';
+      status.classList.add('show', 'error');
+      setTimeout(() => {
+        status.textContent = '';
+        status.classList.remove('show', 'error');
+      }, 3000);
+    }
+  } catch (error) {
+    console.error('Failed to save options:', error);
+    status.textContent = `Error saving options: ${error.message}`;
+    status.classList.add('show', 'error');
+    setTimeout(() => {
+      status.textContent = '';
+      status.classList.remove('show', 'error');
+    }, 3000);
+  }
+}
+
+// Restores options using VideoSpeedConfig system
+async function restore_options() {
+  try {
+    // Ensure VideoSpeedConfig singleton is initialized
+    if (!window.VSC.videoSpeedConfig) {
+      window.VSC.videoSpeedConfig = new window.VSC.VideoSpeedConfig();
+    }
+
+    // Load settings using VideoSpeedConfig
+    await window.VSC.videoSpeedConfig.load();
+    const storage = window.VSC.videoSpeedConfig.settings;
+
+    document.getElementById('rememberSpeed').checked = storage.rememberSpeed;
+    document.getElementById('exclusiveKeys').checked = storage.exclusiveKeys;
+    document.getElementById('audioBoolean').checked = storage.audioBoolean;
+    document.getElementById('startHidden').checked = storage.startHidden;
+    document.getElementById('controllerOpacity').value = storage.controllerOpacity;
+    document.getElementById('controllerButtonSize').value = storage.controllerButtonSize;
+    document.getElementById('logLevel').value = storage.logLevel;
+    document.getElementById('controllerCSS').value =
+      (storage.customCSS != null) ? storage.customCSS : '';
+
+    // Render site rules
+    const siteRules = storage.siteRules || window.VSC.Constants.DEFAULT_SETTINGS.siteRules;
+    const rulesContainer = document.getElementById('site-rules-container');
+    // Clear existing rule rows but keep the header
+    rulesContainer.querySelectorAll('.row.site-rule').forEach((r) => r.remove());
+    for (const rule of siteRules) {
+      add_site_rule(rule);
+    }
+
+    // Process key bindings — all rows rendered dynamically
+    const bindings = storage.keyBindings || window.VSC.Constants.DEFAULT_SETTINGS.keyBindings;
+
+    // Clear existing shortcut rows (handles restore_defaults re-render)
+    const shortcutsContainer = document.getElementById('shortcuts-container');
+    shortcutsContainer.innerHTML = '';
+
+    for (const item of bindings) {
+      if (item.predefined) {
+        add_predefined_shortcut(item);
+      } else {
+        const row = add_shortcut({ action: item.action, value: item.value });
+        setShortcutInput(row.querySelector('.customKey'), item);
       }
     }
+  } catch (error) {
+    console.error('Failed to restore options:', error);
+    document.getElementById('status').textContent = `Error loading options: ${error.message}`;
+    document.getElementById('status').classList.add('show', 'error');
+    setTimeout(() => {
+      document.getElementById('status').textContent = '';
+      document.getElementById('status').classList.remove('show', 'error');
+    }, 3000);
+  }
+}
+
+async function restore_defaults() {
+  try {
+    const status = document.getElementById('status');
+    status.textContent = 'Restoring defaults...';
+    status.classList.remove('success', 'error');
+    status.classList.add('show');
+
+    // Clear all storage
+    await window.VSC.StorageManager.clear();
+
+    // Ensure VideoSpeedConfig singleton is initialized
+    if (!window.VSC.videoSpeedConfig) {
+      window.VSC.videoSpeedConfig = new window.VSC.VideoSpeedConfig();
+    }
+
+    const defaults = { ...window.VSC.Constants.DEFAULT_SETTINGS, schemaVersion: 2 };
+    const ok = await window.VSC.videoSpeedConfig.save(defaults);
+    if (!ok) {
+      throw new Error('failed to write defaults to storage');
+    }
+
+    // Reload the options page (clears and re-renders all shortcut rows)
+    await restore_options();
+
+    status.textContent = 'Default options restored';
+    status.classList.add('success');
+    setTimeout(() => {
+      status.textContent = '';
+      status.classList.remove('show', 'success');
+    }, 2000);
+  } catch (error) {
+    console.error('Failed to restore defaults:', error);
+    status.textContent = `Error restoring defaults: ${error.message}`;
+    status.classList.add('show', 'error');
+    setTimeout(() => {
+      status.textContent = '';
+      status.classList.remove('show', 'error');
+    }, 3000);
+  }
+}
+
+/**
+ * Export all settings as a JSON file download.
+ */
+async function export_settings() {
+  const status = document.getElementById('status');
+  try {
+    // Ensure config is loaded
+    if (!window.VSC.videoSpeedConfig) {
+      window.VSC.videoSpeedConfig = new window.VSC.VideoSpeedConfig();
+    }
+    await window.VSC.videoSpeedConfig.load();
+    const settings = { ...window.VSC.videoSpeedConfig.settings };
+
+    const blob = new Blob([JSON.stringify(settings, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'videospeed-settings.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    status.textContent = 'Settings exported';
+    status.classList.remove('error');
+    status.classList.add('show', 'success');
+    setTimeout(() => {
+      status.textContent = '';
+      status.classList.remove('show', 'success');
+    }, 2000);
+  } catch (error) {
+    console.error('Failed to export settings:', error);
+    status.textContent = `Error exporting settings: ${error.message}`;
+    status.classList.add('show', 'error');
+    setTimeout(() => {
+      status.textContent = '';
+      status.classList.remove('show', 'error');
+    }, 3000);
+  }
+}
+
+// UXP: Blob.text() is newer than some Goanna builds; FileReader reads the
+// same text everywhere.
+function readFileText(file) {
+  if (typeof file.text === 'function') {
+    return file.text();
+  }
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsText(file);
+  });
+}
+
+/**
+ * Import settings from a JSON file. Validates structure before applying.
+ */
+function import_settings() {
+  document.getElementById('importFile').click();
+}
+
+async function handleImportFile(event) {
+  const status = document.getElementById('status');
+  const file = event.target.files[0];
+  if (!file) {
+    return;
+  }
+
+  // Reset the input so the same file can be re-selected
+  event.target.value = '';
+
+  try {
+    const text = await readFileText(file);
+    let imported;
+    try {
+      imported = JSON.parse(text);
+    } catch (e) {
+      throw new Error('File is not valid JSON', { cause: e });
+    }
+
+    if (!imported || typeof imported !== 'object' || !Array.isArray(imported.keyBindings)) {
+      throw new Error('File does not look like a Video Speed Controller settings file');
+    }
+
+    // Ensure config is initialized
+    if (!window.VSC.videoSpeedConfig) {
+      window.VSC.videoSpeedConfig = new window.VSC.VideoSpeedConfig();
+    }
+
+    // Clear existing storage and write the imported settings
+    await window.VSC.StorageManager.clear();
+    const ok = await window.VSC.videoSpeedConfig.save(imported);
+    if (!ok) {
+      throw new Error('Failed to write imported settings to storage');
+    }
+
+    // Remove custom shortcut rows before reloading UI
+    document.querySelectorAll('.removeParent').forEach((button) => {
+      button.click();
+    });
+
+    // Reload settings into the UI
+    await restore_options();
+
+    status.textContent = 'Settings imported successfully';
+    status.classList.remove('error');
+    status.classList.add('show', 'success');
+    setTimeout(() => {
+      status.textContent = '';
+      status.classList.remove('show', 'success');
+    }, 2000);
+  } catch (error) {
+    console.error('Failed to import settings:', error);
+    status.textContent = `Import failed: ${error.message}`;
+    status.classList.add('show', 'error');
+    setTimeout(() => {
+      status.textContent = '';
+      status.classList.remove('show', 'error');
+    }, 4000);
+  }
+}
+
+function switchTab(tabName) {
+  ['settings', 'advanced', 'faq'].forEach((name) => {
+    document.getElementById(`tab-${name}`).classList.toggle('active', name === tabName);
+    document.getElementById(`panel-${name}`).style.display = name === tabName ? '' : 'none';
+  });
+}
+
+document.addEventListener('DOMContentLoaded', async () => {
+  // Optional: Set up storage error monitoring for debugging/telemetry
+  window.VSC.StorageManager.onError((error, data) => {
+    // Log to console for debugging, could also send telemetry
+    console.warn('Storage operation failed:', error.message, data);
+  });
+
+  await restore_options();
+
+  const saveBtn = document.getElementById('save');
+
+  // Dirty-state tracking: green button when unsaved changes exist,
+  // dimmed briefly after save to confirm the action landed.
+  function markDirty() {
+    saveBtn.classList.add('has-changes');
+    saveBtn.classList.remove('saved');
+  }
+  function markClean() {
+    saveBtn.classList.remove('has-changes');
+    saveBtn.classList.add('saved');
+    setTimeout(() => saveBtn.classList.remove('saved'), 1500);
+  }
+
+  // Catch all form changes via delegation (covers dynamic rows too)
+  document.body.addEventListener('input', markDirty);
+  document.body.addEventListener('change', markDirty);
+
+  saveBtn.addEventListener('click', async (e) => {
+    e.preventDefault();
+    await save_options();
+    markClean();
+  });
+
+  document.getElementById('add').addEventListener('click', () => {
+    add_shortcut();
+    markDirty();
+  });
+  document.getElementById('add-site-rule').addEventListener('click', () => {
+    add_site_rule();
+    markDirty();
+  });
+
+  document.getElementById('restore').addEventListener('click', async (e) => {
+    e.preventDefault();
+    await restore_defaults();
+    markDirty();
+  });
+
+  document.getElementById('export').addEventListener('click', (e) => {
+    e.preventDefault();
+    export_settings();
+  });
+
+  document.getElementById('import').addEventListener('click', (e) => {
+    e.preventDefault();
+    import_settings();
+  });
+
+  document.getElementById('importFile').addEventListener('change', handleImportFile);
+
+  document.getElementById('tab-settings').addEventListener('click', () => switchTab('settings'));
+  document.getElementById('tab-advanced').addEventListener('click', () => switchTab('advanced'));
+  document.getElementById('tab-faq').addEventListener('click', () => switchTab('faq'));
+
+  // Split button dropdown
+  const splitMenu = document.getElementById('split-menu');
+  document.getElementById('split-toggle').addEventListener('click', () => {
+    splitMenu.hidden = !splitMenu.hidden;
+  });
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.split-button')) {
+      splitMenu.hidden = true;
+    }
+  });
+  // Close dropdown after any menu action
+  splitMenu.addEventListener('click', () => {
+    splitMenu.hidden = true;
+  });
+
+  // CSS editor: live validation (debounced) + syntax highlighting + scroll sync
+  const cssTextarea = document.getElementById('controllerCSS');
+  let cssValidationTimer;
+  cssTextarea.addEventListener('input', () => {
+    updateCSSHighlight();
+    clearTimeout(cssValidationTimer);
+    cssValidationTimer = setTimeout(() => {
+      validateControllerCSS(cssTextarea.value);
+    }, 300);
+  });
+  cssTextarea.addEventListener('scroll', syncCSSScroll);
+
+  // Initial highlight + validation
+  updateCSSHighlight();
+  validateControllerCSS(cssTextarea.value);
+
+  // About and feedback button event listeners
+  document.getElementById('about').addEventListener('click', () => {
+    window.open('https://github.com/SecondCityOsD/videospeed');
+  });
+
+  document.getElementById('feedback').addEventListener('click', () => {
+    window.open('https://github.com/SecondCityOsD/videospeed/issues');
+  });
+
+  function eventCaller(event, className, funcName) {
+    if (!event.target.classList.contains(className)) {
+      return;
+    }
+    funcName(event);
+  }
+
+  document.addEventListener('beforeinput', (event) => {
+    eventCaller(event, 'customValue', inputFilterNumbersOnly);
+  });
+  // UXP: Goanna builds without the beforeinput event get the same filter from
+  // keypress (typed characters) and paste.
+  if (!('onbeforeinput' in document.documentElement)) {
+    const filterInput = (event, inputType, data) => {
+      eventCaller(
+        { target: event.target, inputType, data, preventDefault: () => event.preventDefault() },
+        'customValue',
+        inputFilterNumbersOnly
+      );
+    };
+    document.addEventListener('keypress', (event) => {
+      // Shortcuts (Ctrl+V, Alt+menu keys) insert nothing; AltGr reports
+      // Ctrl+Alt and does type a character.
+      if (event.charCode && !event.metaKey && event.ctrlKey === event.altKey) {
+        filterInput(event, 'insertText', String.fromCharCode(event.charCode));
+      }
+    });
+    document.addEventListener('paste', (event) => {
+      if (event.clipboardData) {
+        filterInput(event, 'insertFromPaste', event.clipboardData.getData('text/plain'));
+      }
+    });
+  }
+  document.addEventListener('focus', (event) => {
+    eventCaller(event, 'customKey', inputFocus);
+  });
+  document.addEventListener('blur', (event) => {
+    eventCaller(event, 'customKey', inputBlur);
+  });
+  document.addEventListener('keydown', (event) => {
+    eventCaller(event, 'customKey', recordKeyPress);
+  });
+  document.addEventListener('click', (event) => {
+    eventCaller(event, 'removeParent', () => {
+      event.target.closest('.row').remove();
+      markDirty();
+    });
+  });
+  document.addEventListener('change', (event) => {
+    eventCaller(event, 'customDo', () => {
+      const row = event.target.closest('.row');
+      const valueInput = row.querySelector('.customValue');
+      if (window.VSC.Constants.CUSTOM_ACTIONS_NO_VALUES.includes(event.target.value)) {
+        valueInput.style.display = 'none';
+        valueInput.value = 0;
+      } else {
+        valueInput.style.display = 'inline-block';
+      }
+    });
   });
 });
+
+})();

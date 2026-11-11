@@ -29,6 +29,9 @@
  *     page CSS. Position, offsets, display, visibility and opacity stay
  *     normal-priority as upstream, so site overrides, the visibility layer
  *     and the user's custom CSS can still change them.
+ *   - stripCSSImports() (below): upstream applies CSS through
+ *     CSSStyleSheet#replaceSync(), which drops @import rules; the fork's
+ *     <style> elements would load them.
  *
  * Inner-controller layout and the visibility precedence (upstream's shadow
  * CSS) live in ui/shadow-dom.js.
@@ -239,7 +242,124 @@ body:has(> #player-controls) > vsc-controller {
   top: 0px;
 }`;
 
+// CSS escapes inside an at-keyword name (`@\69mport` is `@import`).
+const AT_NAME = /(?:[-\w]|[^\x00-\x7f]|\\(?:[0-9a-fA-F]{1,6}[ \t\n\r\f]?|[^\n\r\f0-9a-fA-F]))*/y;
+const ESCAPE = /\\(?:([0-9a-fA-F]{1,6})[ \t\n\r\f]?|([^\n\r\f]))/g;
+
+function decodeEscapes(name) {
+  return name.replace(ESCAPE, (_, hex, ch) => {
+    if (hex === undefined) {
+      return ch;
+    }
+    const cp = parseInt(hex, 16);
+    return cp === 0 || cp > 0x10ffff || (cp >= 0xd800 && cp <= 0xdfff)
+      ? '�'
+      : String.fromCodePoint(cp);
+  });
+}
+
+/** Index just past the string token that opens at `i` (a bad string ends at a newline). */
+function skipString(css, i) {
+  const quote = css[i];
+  for (i++; i < css.length; i++) {
+    const c = css[i];
+    if (c === quote) {
+      return i + 1;
+    }
+    if (c === '\n' || c === '\r' || c === '\f') {
+      return i;
+    }
+    if (c === '\\') {
+      i++;
+    }
+  }
+  return i;
+}
+
+/**
+ * Index just past the `;` ending the at-rule statement whose prelude starts at
+ * `i`, or -1 when a `{` comes first (not a statement). Unquoted url() may hold
+ * `;`, so parentheses nest; an unterminated statement runs to the end.
+ */
+function statementEnd(css, i) {
+  let parens = 0;
+  while (i < css.length) {
+    const c = css[i];
+    if (c === '"' || c === "'") {
+      i = skipString(css, i);
+      continue;
+    }
+    if (c === '/' && css[i + 1] === '*') {
+      const close = css.indexOf('*/', i + 2);
+      i = close === -1 ? css.length : close + 2;
+      continue;
+    }
+    if (c === '(') {
+      parens++;
+    } else if (c === ')') {
+      parens = Math.max(0, parens - 1);
+    } else if (parens === 0 && c === '{') {
+      return -1;
+    } else if (parens === 0 && c === ';') {
+      return i + 1;
+    }
+    i++;
+  }
+  return css.length;
+}
+
+/**
+ * Remove every top-level @import statement from a style sheet's text.
+ *
+ * UXP: upstream applies the controller CSS and the user's custom CSS through
+ * CSSStyleSheet#replaceSync(), which drops @import rules — they never load.
+ * The fork has to use <style> elements, which would fetch them (from the page,
+ * or from the privileged options page while it validates). Removing them gives
+ * replaceSync()'s result. @import inside a block is invalid CSS no engine
+ * loads, so only top level is scanned; strings and comments are skipped so
+ * their braces and `@` signs don't count.
+ * @param {string} css
+ * @returns {string}
+ */
+function stripCSSImports(css) {
+  let out = '';
+  let copied = 0;
+  let depth = 0;
+  let i = 0;
+  while (i < css.length) {
+    const c = css[i];
+    if (c === '"' || c === "'") {
+      i = skipString(css, i);
+    } else if (c === '/' && css[i + 1] === '*') {
+      const close = css.indexOf('*/', i + 2);
+      i = close === -1 ? css.length : close + 2;
+    } else if (c === '{') {
+      depth++;
+      i++;
+    } else if (c === '}') {
+      depth = Math.max(0, depth - 1);
+      i++;
+    } else if (c === '@' && depth === 0) {
+      AT_NAME.lastIndex = i + 1;
+      const name = AT_NAME.exec(css)[0];
+      const end =
+        decodeEscapes(name).toLowerCase() === 'import' ? statementEnd(css, i + 1 + name.length) : -1;
+      if (end === -1) {
+        i += 1 + name.length;
+      } else {
+        out += css.slice(copied, i);
+        copied = end;
+        i = end;
+      }
+    } else {
+      i++;
+    }
+  }
+  return copied === 0 ? css : out + css.slice(copied);
+}
+
 window.VSC = window.VSC || {};
 window.VSC.DEFAULT_CONTROLLER_CSS = DEFAULT_CONTROLLER_CSS;
+window.VSC.stripCSSImports = stripCSSImports;
 
 })();
