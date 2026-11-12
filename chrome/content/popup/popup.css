@@ -1,13 +1,16 @@
 /* Video Speed Controller — Popup (legacy Pale Moon XUL styling) */
 
+/* Transparent: the buttons sit on the arrow panel's own background, which
+   already pads its content (the iframe is marked transparent in overlay.xul). */
 window {
-  background-color: -moz-Dialog;
+  -moz-appearance: none;
+  background-color: transparent;
   color: -moz-DialogText;
   font: message-box;
 }
 
 #popup-container {
-  padding: 6px;
+  padding: 2px;
   min-width: 230px;
 }
 

@@ -57,6 +57,13 @@ window.Components = {
     reportError: (e) => errors.push(String(e)),
   },
 };
+// The panel's <iframe> (overlay.xul) and the container's laid-out height:
+// 0 until the panel is open, as in a closed XUL panel.
+const frame = { style: { height: '175px' } };
+let containerHeight = 0;
+Object.defineProperty(window, 'frameElement', { configurable: true, get: () => frame });
+doc.getElementById('popup-container').getBoundingClientRect = () => ({ height: containerHeight });
+
 new vm.Script(fs.readFileSync(path.join(POPUP_DIR, 'popup.js'), 'utf8'), { filename: 'popup.js' }).runInContext(
   dom.getInternalVMContext()
 );
@@ -74,6 +81,11 @@ const shown = async () => {
   window.postMessage({ type: 'VSC_PANEL_SHOWN' }, '*');
   await tick();
 };
+
+expect('not laid out yet: the frame keeps its first-guess height', frame.style.height, '175px');
+containerHeight = 131.4;
+await shown();
+expect('on opening, the frame fits the content height', frame.style.height, '132px');
 
 expect('without stored bindings: upstream fallbacks -0.1 / 1 / +0.1', labels(), ['-0.1', '1', '+0.1']);
 expect('the power button offers to disable', $('disable').getAttribute('tooltiptext'), 'Disable Extension');

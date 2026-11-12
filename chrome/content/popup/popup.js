@@ -62,6 +62,18 @@ window.addEventListener("load", function() {
     var status = document.getElementById("status");
     status.hidden = true;
     status.setAttribute("value", "");
+    fitFrame();
+  }
+
+  // The panel's <iframe> starts at a guessed size (overlay.xul). Fit its
+  // height to the content, which varies with fonts and DPI, so the panel ends
+  // right below the buttons. Only while laid out, i.e. the panel is open.
+  function fitFrame() {
+    var frame = window.frameElement;
+    var height = document.getElementById("popup-container").getBoundingClientRect().height;
+    if (frame && height > 0) {
+      frame.style.height = Math.ceil(height) + "px";
+    }
   }
 
   // The toolbar icon follows the pref through the overlay's observer.

@@ -28,8 +28,12 @@
            position="bottomcenter topright"
            onpopupshown="VideoSpeedOverlay.onPanelShown();"
            onpopuphidden="VideoSpeedOverlay.onPanelHidden();">
+      <!-- transparent: the popup draws on the panel's own background (no box
+           inside a frame). The height is a first guess; popup.js fits it to
+           the content each time the panel opens. -->
       <iframe id="videospeed-popup-frame"
               src="chrome://videospeed/content/popup/popup.xul"
+              transparent="transparent"
               style="width: 245px; height: 175px; border: none;" />
     </panel>
   </popupset>

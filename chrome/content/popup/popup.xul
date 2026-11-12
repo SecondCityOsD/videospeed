@@ -6,7 +6,9 @@
 
   <script type="application/x-javascript" src="popup.js"/>
 
-  <vbox id="popup-container" flex="1">
+  <!-- No flex: the box keeps its content height, which popup.js gives the
+       panel's iframe. -->
+  <vbox id="popup-container">
 
     <!-- Speed Controls: -step / reset / +step -->
     <hbox id="speed-controls" align="center">
