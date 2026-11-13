@@ -3,7 +3,7 @@
 **Video Speed Controller** gives you fine-grained control over any HTML5 video
 or audio element, on any site. This is the UXP port of
 [igrigorik/videospeed](https://github.com/igrigorik/videospeed) **0.11.1** for
-Pale Moon (28–33) and Basilisk (52–56): the same features and the same
+Pale Moon (28–35) and Basilisk (52–56): the same features and the same
 behavior as the Chrome extension, built as a classic XUL extension.
 
 ## The science of accelerated playback
@@ -35,8 +35,11 @@ fixed pace, and we shouldn't watch at one either.
 3. Restart the browser when asked. The Video Speed Controller button is added
    to the navigation toolbar.
 
-Updating from an older version keeps your settings: shortcuts recorded in the
-old format and the old "disabled sites" list are converted on the first start.
+From 0.11.1 on, new versions arrive through the Add-ons Manager's automatic
+update check. Earlier versions can't check for updates, so install 0.11.1 by
+hand once. Updating keeps your settings: shortcuts recorded in the old format
+and the old "disabled sites" list are converted on the first start. What
+changed is in [CHANGELOG.md](CHANGELOG.md).
 
 ## Features
 

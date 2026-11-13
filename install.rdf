@@ -11,6 +11,8 @@
     <em:description>Speed up, slow down, advance and rewind HTML5 audio/video with shortcuts</em:description>
     <em:creator>SecondCityOsD</em:creator>
     <em:homepageURL>https://github.com/SecondCityOsD/videospeed</em:homepageURL>
+    <!-- Update manifest (repository root); lists the latest release's XPI. -->
+    <em:updateURL>https://raw.githubusercontent.com/SecondCityOsD/videospeed/main/update.rdf</em:updateURL>
     <em:iconURL>chrome://videospeed/skin/icon48.png</em:iconURL>
     <em:icon64URL>chrome://videospeed/skin/icon128.png</em:icon64URL>
     <em:optionsURL>chrome://videospeed/content/options/options.xul</em:optionsURL>
@@ -22,7 +24,7 @@
       <Description>
         <em:id>{8de7fcbb-c55c-4fbe-bfc5-fc555c87dbc4}</em:id>
         <em:minVersion>28.0</em:minVersion>
-        <em:maxVersion>33.*</em:maxVersion>
+        <em:maxVersion>35.*</em:maxVersion>
       </Description>
     </em:targetApplication>
 

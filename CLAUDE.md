@@ -9,7 +9,7 @@ behavior, every edge case, adapted only where UXP requires it.
 - **Upstream checkout:** `D:\Vibe coding\videospeed-0.11.1` (sibling folder;
   the tools read it as `../videospeed-0.11.1`)
 - **Extension ID:** `videospeed-uxp@secondcityosd` — version in `install.rdf`
-- **Targets:** Pale Moon 28.0–33.*, Basilisk 52.0–56.*. Single process (UXP
+- **Targets:** Pale Moon 28.0–35.*, Basilisk 52.0–56.*. Single process (UXP
   has no e10s): no frame scripts, no message manager.
 - Restart required to install/update (non-bootstrapped XUL overlay).
 
@@ -218,13 +218,20 @@ with `-OutDir` into a scratch folder.
 
 ## Release
 
-1. Bump `em:version` in `install.rdf`.
+1. Bump `em:version` in `install.rdf` and `update.rdf`; point both
+   `updateLink`s in `update.rdf` at the new release asset. Add a
+   `CHANGELOG.md` section — short, gorhill (uBlock Origin) style: "Fixes /
+   changes", "Closed as fixed", "Commits history since last version".
 2. Port check clean, all harnesses green, suite without regressions.
 3. `.\build-xpi.ps1` → `videospeed-uxp-<version>.xpi` in the root (`*.xpi` is
    gitignored); older release XPIs stay untouched.
 4. Commit on `main` as `SecondCityOsD <sinfulosd@tutanota.com>`
    (`git -c user.name=… -c user.email=…`); push and publish the GitHub release
    only when asked.
+5. GitHub release: tag `videospeed<version>`, title "Video Speed Controller
+   <version>", the CHANGELOG section as notes, the XPI as asset. Installed
+   copies read `update.rdf` from raw `main` (`em:updateURL`), so the release
+   asset must exist before or with the push that changes `update.rdf`.
 
 ## Deliberate differences from upstream
 
