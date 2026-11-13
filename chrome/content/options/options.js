@@ -3,7 +3,7 @@
  * Import required dependencies that are normally bundled in inject context
  */
 
-// UXP: options.html loads the modules upstream bundles here as <script>
+// UXP: options.xul loads the modules upstream bundles here as <script>
 // tags, before this file: key-maps, controller-css-defaults, constants,
 // logger, chrome-storage (the chrome.storage shim over the prefs),
 // storage-manager, settings and row-renderer.
@@ -18,8 +18,12 @@
 
 window.VSC = window.VSC || {};
 
-// UXP: row-renderer.js publishes createRow on window.VSC.
-const { createRow } = window.VSC;
+// UXP: row-renderer.js publishes createRow and createHTMLElement on
+// window.VSC. options.xul is a XUL document: document.createElement() would
+// make XUL elements, and there is no document.body — the page's body is the
+// XHTML #vsc-body.
+const { createRow, createHTMLElement } = window.VSC;
+const pageBody = () => document.getElementById('vsc-body');
 
 let keyBindings = [];
 
@@ -76,7 +80,13 @@ function updateCSSHighlight() {
   const textarea = document.getElementById('controllerCSS');
   const highlight = document.getElementById('cssHighlight');
   if (textarea && highlight) {
-    highlight.innerHTML = `${highlightCSS(textarea.value)}\n`;
+    // UXP: in a XUL document innerHTML parses as XML, which rejects what
+    // the HTML parser forgives (stray control characters): show plain text.
+    try {
+      highlight.innerHTML = `${highlightCSS(textarea.value)}\n`;
+    } catch (e) {
+      highlight.textContent = `${textarea.value}\n`;
+    }
   }
 }
 
@@ -192,10 +202,10 @@ function findDroppedRules(css, parsedSheet) {
 // replaceSync(), drop @import rules first — this privileged page must not
 // fetch them either.
 function parseStyleSheet(css) {
-  const style = document.createElement('style');
+  const style = createHTMLElement('style');
   style.media = 'not all';
   style.textContent = window.VSC.stripCSSImports(css);
-  document.head.appendChild(style);
+  pageBody().appendChild(style);
   const cssRules = Array.from(style.sheet.cssRules);
   style.remove();
   return { cssRules };
@@ -391,15 +401,15 @@ function autoSizeKeyInput(input) {
     input.style.width = `${minWidth}px`;
     return;
   }
-  const span = document.createElement('span');
+  const span = createHTMLElement('span');
   span.style.visibility = 'hidden';
   span.style.position = 'absolute';
   span.style.font = getComputedStyle(input).font;
   span.style.whiteSpace = 'nowrap';
   span.textContent = input.value;
-  document.body.appendChild(span);
+  pageBody().appendChild(span);
   const textWidth = span.offsetWidth;
-  document.body.removeChild(span);
+  pageBody().removeChild(span);
   input.style.width = `${Math.max(minWidth, textWidth + 26)}px`;
 }
 
@@ -481,7 +491,7 @@ function recordKeyPress(e) {
 
 function showWarning(input, message) {
   clearWarning(input);
-  const warn = document.createElement('span');
+  const warn = createHTMLElement('span');
   warn.className = 'shortcut-warning';
   warn.textContent = message;
   warn.style.cssText = 'display:block;color:#c57600;font-size:11px;margin-top:2px;';
@@ -927,12 +937,12 @@ async function export_settings() {
 
     const blob = new Blob([JSON.stringify(settings, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
+    const a = createHTMLElement('a');
     a.href = url;
     a.download = 'videospeed-settings.json';
-    document.body.appendChild(a);
+    pageBody().appendChild(a);
     a.click();
-    document.body.removeChild(a);
+    pageBody().removeChild(a);
     URL.revokeObjectURL(url);
 
     status.textContent = 'Settings exported';
@@ -1043,6 +1053,10 @@ function switchTab(tabName) {
 }
 
 document.addEventListener('DOMContentLoaded', async () => {
+  // UXP: options.xul scrolls inside #vsc-viewport, not the window; focus it so
+  // PageDown, Space and the arrow keys scroll the page as in an HTML document.
+  document.getElementById('vsc-viewport').focus();
+
   // Optional: Set up storage error monitoring for debugging/telemetry
   window.VSC.StorageManager.onError((error, data) => {
     // Log to console for debugging, could also send telemetry
@@ -1066,8 +1080,8 @@ document.addEventListener('DOMContentLoaded', async () => {
   }
 
   // Catch all form changes via delegation (covers dynamic rows too)
-  document.body.addEventListener('input', markDirty);
-  document.body.addEventListener('change', markDirty);
+  pageBody().addEventListener('input', markDirty);
+  pageBody().addEventListener('change', markDirty);
 
   saveBtn.addEventListener('click', async (e) => {
     e.preventDefault();
@@ -1158,7 +1172,7 @@ document.addEventListener('DOMContentLoaded', async () => {
   });
   // UXP: Goanna builds without the beforeinput event get the same filter from
   // keypress (typed characters) and paste.
-  if (!('onbeforeinput' in document.documentElement)) {
+  if (!('onbeforeinput' in pageBody())) {
     const filterInput = (event, inputType, data) => {
       eventCaller(
         { target: event.target, inputType, data, preventDefault: () => event.preventDefault() },

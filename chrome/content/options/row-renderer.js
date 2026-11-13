@@ -34,7 +34,7 @@
  * @returns {HTMLElement} The created row element
  */
 function createRow(container, columns, data = {}, opts = {}) {
-  const row = document.createElement('div');
+  const row = createHTMLElement('div');
   row.className = `row${opts.className ? ` ${opts.className}` : ''}`;
   if (opts.id) {
     row.id = opts.id;
@@ -44,10 +44,10 @@ function createRow(container, columns, data = {}, opts = {}) {
     let el;
 
     if (col.type === 'select') {
-      el = document.createElement('select');
+      el = createHTMLElement('select');
       el.className = col.className;
       for (const [value, label] of col.options) {
-        const opt = document.createElement('option');
+        const opt = createHTMLElement('option');
         opt.value = value;
         opt.textContent = label;
         el.appendChild(opt);
@@ -56,14 +56,14 @@ function createRow(container, columns, data = {}, opts = {}) {
         el.value = data[col.key];
       }
     } else if (col.type === 'checkbox') {
-      el = document.createElement('input');
+      el = createHTMLElement('input');
       el.type = 'checkbox';
       el.className = col.className;
       el.checked =
         data[col.key] != null ? data[col.key] : col.default != null ? col.default : false;
     } else {
       // 'text' or any other input type
-      el = document.createElement('input');
+      el = createHTMLElement('input');
       el.type = col.inputType || 'text';
       el.className = col.className;
       if (col.placeholder) {
@@ -79,7 +79,7 @@ function createRow(container, columns, data = {}, opts = {}) {
   }
 
   if (opts.removable) {
-    const btn = document.createElement('button');
+    const btn = createHTMLElement('button');
     btn.className = 'removeParent';
     btn.textContent = '\u00d7';
     row.appendChild(btn);
@@ -94,8 +94,15 @@ function createRow(container, columns, data = {}, opts = {}) {
   return row;
 }
 
-// UXP: stands in for upstream's ES module export (options.js reads it).
+// UXP: the options page is a XUL document (options.xul), where
+// document.createElement() makes XUL elements; the page's are XHTML.
+function createHTMLElement(name) {
+  return document.createElementNS('http://www.w3.org/1999/xhtml', name);
+}
+
+// UXP: stands in for upstream's ES module exports (options.js reads them).
 window.VSC = window.VSC || {};
 window.VSC.createRow = createRow;
+window.VSC.createHTMLElement = createHTMLElement;
 
 })();

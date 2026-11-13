@@ -32,7 +32,7 @@ window.addEventListener("load", function() {
     // focuses the options tab when one is already open.
     var mainWindow = getMainWindow();
     if (mainWindow && mainWindow.switchToTabHavingURI) {
-      mainWindow.switchToTabHavingURI("chrome://videospeed/content/options/options.html", true);
+      mainWindow.switchToTabHavingURI("chrome://videospeed/content/options/options.xul", true);
     }
     var panel = getMainWindow().document.getElementById("videospeed-panel");
     if (panel) panel.hidePopup();

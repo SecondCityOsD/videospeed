@@ -118,7 +118,7 @@ command($('speed-decrease'));
 expect('steps use the re-read values', sent.splice(0), [{ type: 'VSC_ADJUST_SPEED', payload: { delta: -0.25 } }]);
 
 command($('config'));
-expect('settings opens (or focuses) the options tab and closes the panel', [opened, panelHidden], [[['chrome://videospeed/content/options/options.html', true]], 1]);
+expect('settings opens (or focuses) the options tab and closes the panel', [opened, panelHidden], [[['chrome://videospeed/content/options/options.xul', true]], 1]);
 expect('no popup errors', errors, []);
 window.close();
 

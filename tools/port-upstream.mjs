@@ -1288,33 +1288,58 @@ class VideoMutationObserver {`,
     ],
   },
 
-  // --- Options page: upstream's HTML page, served as chrome-privileged HTML --
-  // (chrome://videospeed/content/options/options.html). Its chrome.storage
-  // calls reach the prefs through chrome/content/options/chrome-storage.js.
+  // --- Options page: upstream's HTML page as a XUL document -----------------
+  // (chrome://videospeed/content/options/options.xul, opened in a tab). The
+  // page's markup stays upstream's, as XHTML inside the XUL window, so it looks
+  // and behaves as the HTML page does. Its chrome.storage calls reach the prefs
+  // through chrome/content/options/chrome-storage.js.
   'ui/options/options.html': {
-    dest: 'chrome/content/options/options.html',
+    dest: 'chrome/content/options/options.xul',
     wrap: false,
     edits: [
+      {
+        from: '<!doctype html>',
+        through: '  <body>\n',
+        to: `<?xml version="1.0" encoding="utf-8"?>
+<?xml-stylesheet href="options.css" type="text/css"?>
+<!-- UXP: upstream's options.html as a XUL document. The page's own markup is
+     XHTML (the default namespace from #vsc-viewport down), laid out as in an
+     HTML document: #vsc-viewport stands in for the scrolling viewport and
+     paints the canvas background, #vsc-html and #vsc-body for <html> and
+     <body> (options.css). -->
+<window xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+        id="vsc-options"
+        title="Video Speed Controller: Options">
+  <!-- UXP: upstream bundles these into one options.js. Load order matters:
+       chrome-storage.js (the chrome.storage shim) must precede
+       storage-manager.js, which picks its backend when it loads. -->
+  <script type="application/javascript" src="resource://videospeed/utils/key-maps.js"/>
+  <script type="application/javascript" src="resource://videospeed/styles/controller-css-defaults.js"/>
+  <script type="application/javascript" src="resource://videospeed/utils/constants.js"/>
+  <script type="application/javascript" src="resource://videospeed/utils/logger.js"/>
+  <script type="application/javascript" src="chrome-storage.js"/>
+  <script type="application/javascript" src="resource://videospeed/core/storage-manager.js"/>
+  <script type="application/javascript" src="resource://videospeed/core/settings.js"/>
+  <script type="application/javascript" src="row-renderer.js"/>
+  <script type="application/javascript" src="options.js"/>
+
+  <div id="vsc-viewport" xmlns="http://www.w3.org/1999/xhtml" tabindex="-1">
+  <div id="vsc-html">
+  <div id="vsc-body">
+`,
+      },
+      ['  </body>\n</html>', '  </div>\n  </div>\n  </div>\n</window>'],
+      // UXP: XML has no valueless attributes and predefines only five named
+      // entities.
       [
-        `    <title>Video Speed Controller: Options</title>
-    <link rel="stylesheet" href="options.css" />
-    <script src="options.js"></script>`,
-        `    <meta charset="utf-8" />
-    <title>Video Speed Controller: Options</title>
-    <link rel="stylesheet" href="options.css" />
-    <!-- UXP: upstream bundles these into one options.js. Load order matters:
-         chrome-storage.js (the chrome.storage shim) must precede
-         storage-manager.js, which picks its backend when it loads. -->
-    <script src="resource://videospeed/utils/key-maps.js"></script>
-    <script src="resource://videospeed/styles/controller-css-defaults.js"></script>
-    <script src="resource://videospeed/utils/constants.js"></script>
-    <script src="resource://videospeed/utils/logger.js"></script>
-    <script src="chrome-storage.js"></script>
-    <script src="resource://videospeed/core/storage-manager.js"></script>
-    <script src="resource://videospeed/core/settings.js"></script>
-    <script src="row-renderer.js"></script>
-    <script src="options.js"></script>`,
+        '<div id="split-menu" class="split-dropdown" hidden>',
+        '<div id="split-menu" class="split-dropdown" hidden="hidden">',
       ],
+      [
+        '<input type="file" id="importFile" accept=".json" hidden />',
+        '<input type="file" id="importFile" accept=".json" hidden="hidden" />',
+      ],
+      { every: '&mdash;', to: '&#8212;', count: 5 },
       [
         '<img src="../../assets/icons/icon48.png"',
         '<img src="chrome://videospeed/skin/icon48.png"',
@@ -1374,7 +1399,52 @@ class VideoMutationObserver {`,
     dest: 'chrome/content/options/options.css',
     wrap: false,
     edits: [
-      // UXP: the static rows carry classes instead (options.html); Goanna
+      // UXP: options.xul — the HTML root and body rules move to their
+      // stand-ins, after the rules for the XUL window and the viewport.
+      [
+        `html {
+  max-width: 720px;`,
+        `/* UXP: options.xul. The XUL window and #vsc-viewport stand in for the HTML
+   document's root and scrolling viewport: the viewport is pinned to the
+   window's edges and scrolls the page — fixed, because as a box child of the
+   XUL window it would be laid out at its full content height and never
+   scroll — and paints the canvas background (an HTML root background covers
+   the whole viewport). It also restores what an HTML page starts from: the
+   medium font size (XUL windows use the small UI font) and selectable text
+   (XUL turns selection off). options.js focuses it so the keyboard scrolls
+   it. #vsc-html and #vsc-body take upstream's html and body rules. */
+window {
+  -moz-appearance: none;
+  background-color: var(--md-surface);
+}
+
+#vsc-viewport {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  overflow: auto;
+  outline: none;
+  background-color: var(--md-surface);
+  font-size: medium;
+  -moz-user-select: text;
+}
+
+#vsc-html {
+  max-width: 720px;`,
+      ],
+      [
+        `body {
+  margin: 0;
+  padding: 0 20px 40px;
+}`,
+        `#vsc-body {
+  margin: 0;
+  padding: 0 20px 40px;
+}`,
+      ],
+      // UXP: the static rows carry classes instead (options.xul); Goanna
       // without :has() would drop these rules and lay the editors out beside
       // their labels. The dynamic `.row.customs:has(...)` rules stay and
       // degrade to a slightly wider shortcut row.
@@ -1428,6 +1498,9 @@ button:-moz-focusring {
     anchor: `/**
  * Create a DOM row element from a column spec and optional initial data.`,
     edits: [
+      // UXP: options.xul (see createHTMLElement below). First, so the count
+      // sees upstream's text only.
+      { every: 'document.createElement(', to: 'createHTMLElement(', count: 6 },
       ['export function createRow(', 'function createRow('],
       [
         '      el.checked = data[col.key] ?? col.default ?? false;',
@@ -1444,9 +1517,16 @@ button:-moz-focusring {
         `  return row;
 }
 
-// UXP: stands in for upstream's ES module export (options.js reads it).
+// UXP: the options page is a XUL document (options.xul), where
+// document.createElement() makes XUL elements; the page's are XHTML.
+function createHTMLElement(name) {
+  return document.createElementNS('http://www.w3.org/1999/xhtml', name);
+}
+
+// UXP: stands in for upstream's ES module exports (options.js reads them).
 window.VSC = window.VSC || {};
-window.VSC.createRow = createRow;`,
+window.VSC.createRow = createRow;
+window.VSC.createHTMLElement = createHTMLElement;`,
       ],
     ],
   },
@@ -1455,20 +1535,38 @@ window.VSC.createRow = createRow;`,
     dest: 'chrome/content/options/options.js',
     wrapNote: OPTIONS_WRAP_NOTE,
     edits: [
+      // UXP: options.xul (see createHTMLElement / pageBody below). First, so
+      // the counts see upstream's text only.
+      { every: 'document.createElement(', to: 'createHTMLElement(', count: 3 },
+      { every: 'document.body', to: 'pageBody()', count: 6 },
       {
         from: '// Core utilities and constants - must load first',
         through: "import { createRow } from './row-renderer.js';",
-        to: `// UXP: options.html loads the modules upstream bundles here as <script>
+        to: `// UXP: options.xul loads the modules upstream bundles here as <script>
 // tags, before this file: key-maps, controller-css-defaults, constants,
 // logger, chrome-storage (the chrome.storage shim over the prefs),
 // storage-manager, settings and row-renderer.`,
       },
       [
         'let keyBindings = [];',
-        `// UXP: row-renderer.js publishes createRow on window.VSC.
-const { createRow } = window.VSC;
+        `// UXP: row-renderer.js publishes createRow and createHTMLElement on
+// window.VSC. options.xul is a XUL document: document.createElement() would
+// make XUL elements, and there is no document.body — the page's body is the
+// XHTML #vsc-body.
+const { createRow, createHTMLElement } = window.VSC;
+const pageBody = () => document.getElementById('vsc-body');
 
 let keyBindings = [];`,
+      ],
+      [
+        '    highlight.innerHTML = `${highlightCSS(textarea.value)}\\n`;',
+        `    // UXP: in a XUL document innerHTML parses as XML, which rejects what
+    // the HTML parser forgives (stray control characters): show plain text.
+    try {
+      highlight.innerHTML = \`\${highlightCSS(textarea.value)}\\n\`;
+    } catch (e) {
+      highlight.textContent = \`\${textarea.value}\\n\`;
+    }`,
       ],
       { every: '} catch {', to: '} catch (e) {', count: 3 },
       [
@@ -1515,16 +1613,26 @@ let keyBindings = [];`,
 // replaceSync(), drop @import rules first — this privileged page must not
 // fetch them either.
 function parseStyleSheet(css) {
-  const style = document.createElement('style');
+  const style = createHTMLElement('style');
   style.media = 'not all';
   style.textContent = window.VSC.stripCSSImports(css);
-  document.head.appendChild(style);
+  pageBody().appendChild(style);
   const cssRules = Array.from(style.sheet.cssRules);
   style.remove();
   return { cssRules };
 }
 
 function validateControllerCSS(css) {`,
+      ],
+      [
+        `document.addEventListener('DOMContentLoaded', async () => {
+  // Optional: Set up storage error monitoring for debugging/telemetry`,
+        `document.addEventListener('DOMContentLoaded', async () => {
+  // UXP: options.xul scrolls inside #vsc-viewport, not the window; focus it so
+  // PageDown, Space and the arrow keys scroll the page as in an HTML document.
+  document.getElementById('vsc-viewport').focus();
+
+  // Optional: Set up storage error monitoring for debugging/telemetry`,
       ],
       ['    const text = await file.text();', '    const text = await readFileText(file);'],
       [
@@ -1567,7 +1675,7 @@ function readFileText(file) {
   });
   // UXP: Goanna builds without the beforeinput event get the same filter from
   // keypress (typed characters) and paste.
-  if (!('onbeforeinput' in document.documentElement)) {
+  if (!('onbeforeinput' in pageBody())) {
     const filterInput = (event, inputType, data) => {
       eventCaller(
         { target: event.target, inputType, data, preventDefault: () => event.preventDefault() },

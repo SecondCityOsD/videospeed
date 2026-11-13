@@ -1,5 +1,7 @@
 // Options-page test: upstream's options page as the fork ships it —
-// chrome/content/options/options.html, its scripts run in tag order
+// chrome/content/options/options.xul (a XUL document holding upstream's page
+// as XHTML, loaded here as XML, so document.body is null as in Gecko), its
+// scripts run in tag order
 // (resource://videospeed/* from src/, the rest from chrome/content/options/)
 // as successive classic scripts in one jsdom window — over the real
 // chrome-storage.js shim and VSCPrefs.jsm on the simulated pref branch
@@ -11,13 +13,18 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
-import { repoRoot, requireFromRunDir } from './lib.mjs';
+import { createRequire } from 'node:module';
+import { repoRoot, runDir, requireFromRunDir } from './lib.mjs';
 import { makePrefs } from './xpcom.mjs';
 
 const { JSDOM, VirtualConsole } = requireFromRunDir('jsdom');
+// jsdom internals (by path: its package exports hide them) — see openOptions.
+const { implForWrapper } = createRequire(import.meta.url)(
+  path.join(runDir, 'node_modules/jsdom/lib/generated/idl/utils.js')
+);
 const OPTIONS_DIR = path.join(repoRoot, 'chrome/content/options');
-const OPTIONS_URL = 'chrome://videospeed/content/options/options.html';
-const html = fs.readFileSync(path.join(OPTIONS_DIR, 'options.html'), 'utf8');
+const OPTIONS_URL = 'chrome://videospeed/content/options/options.xul';
+const xul = fs.readFileSync(path.join(OPTIONS_DIR, 'options.xul'), 'utf8');
 
 const tick = (ms = 20) => new Promise((resolve) => setTimeout(resolve, ms));
 let failures = 0;
@@ -27,9 +34,9 @@ function expect(label, actual, wanted) {
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${label}${ok ? '' : `  (got ${JSON.stringify(actual)}, want ${JSON.stringify(wanted)})`}`);
 }
 
-/** options.html's <script src> list, resolved to repository files. */
+/** options.xul's <script src> list, resolved to repository files. */
 function optionsScripts() {
-  return [...html.matchAll(/<script src="([^"]+)"><\/script>/g)].map((m) =>
+  return [...xul.matchAll(/<script type="application\/javascript" src="([^"]+)"\/>/g)].map((m) =>
     m[1].startsWith('resource://videospeed/')
       ? path.join(repoRoot, 'src', m[1].slice('resource://videospeed/'.length))
       : path.join(OPTIONS_DIR, m[1])
@@ -52,8 +59,18 @@ async function openOptions(userPrefs = {}, { beforeInput = true } = {}) {
   virtualConsole.on('jsdomError', (e) => {
     if (!/Could not parse CSS stylesheet/.test(e.message)) errors.push(`jsdom: ${e.message}`);
   });
-  const dom = new JSDOM(html, { url: OPTIONS_URL, runScripts: 'outside-only', pretendToBeVisual: true, virtualConsole });
+  const dom = new JSDOM(xul, {
+    url: OPTIONS_URL,
+    contentType: 'application/xml',
+    runScripts: 'outside-only',
+    pretendToBeVisual: true,
+    virtualConsole,
+  });
   const { window } = dom;
+  // jsdom computes styles only through HTML/SVG ancestors and throws at the
+  // generic-element XUL root; give it the empty inline style Gecko gives every
+  // element.
+  implForWrapper(window.document.documentElement).style = { length: 0, item: () => '' };
   if (!beforeInput) {
     delete window.HTMLElement.prototype.onbeforeinput;
   }
@@ -133,6 +150,8 @@ const DEFAULTS = await (async () => {
   expect('default shortcuts render as locked predefined rows', p.$$('#shortcuts-container .row.customs').map((r) => [r.id, r.querySelector('.customDo').disabled]), DEFAULTS.keyBindings.map((b) => [b.action, true]));
   expect('shortcut labels come from displayKey', p.$$('.customKey').slice(0, 3).map((i) => i.value), ['S', 'D', 'Z']);
   expect('default site rules render', p.rules(), [['imgur.com', true, ''], ['teams.microsoft.com', true, ''], ['meet.google.com', true, '']]);
+  expect('the page viewport has the focus, so the keyboard scrolls it', p.doc.activeElement && p.doc.activeElement.id, 'vsc-viewport');
+  expect('rendered rows are XHTML form elements, not XUL', p.$$('#shortcuts-container *, #site-rules-container *').filter((el) => el.namespaceURI !== 'http://www.w3.org/1999/xhtml').map((el) => el.localName), []);
   expect('preferences show the defaults', ['rememberSpeed', 'exclusiveKeys', 'audioBoolean', 'startHidden'].map((id) => p.$(`#${id}`).checked).concat(['controllerOpacity', 'controllerButtonSize', 'logLevel', 'controllerCSS'].map((id) => p.$(`#${id}`).value)), [false, false, true, false, '0.3', '14', '3', '']);
   expect('no page errors on open', p.errors, []);
 
@@ -415,10 +434,18 @@ const DEFAULTS = await (async () => {
 {
   const rdf = fs.readFileSync(path.join(repoRoot, 'install.rdf'), 'utf8');
   const popup = fs.readFileSync(path.join(repoRoot, 'chrome/content/popup/popup.js'), 'utf8');
-  expect('install.rdf opens options.html in a tab', [rdf.match(/<em:optionsURL>([^<]+)</)[1], rdf.match(/<em:optionsType>([^<]+)</)[1]], [OPTIONS_URL, '3']);
+  expect('install.rdf opens options.xul in a tab', [rdf.match(/<em:optionsURL>([^<]+)</)[1], rdf.match(/<em:optionsType>([^<]+)</)[1]], [OPTIONS_URL, '3']);
   expect('the popup opens the same page', popup.includes(`switchToTabHavingURI("${OPTIONS_URL}", true)`), true);
   expect('every options script exists', optionsScripts().filter((f) => !fs.existsSync(f)), []);
-  expect('the XUL options page is gone', fs.existsSync(path.join(OPTIONS_DIR, 'options.xul')), false);
+  expect('the HTML options page is gone', fs.existsSync(path.join(OPTIONS_DIR, 'options.html')), false);
+  // jsdom does no layout, so check the rule: as a XUL box child the viewport
+  // would grow to its content height and never scroll.
+  const css = fs.readFileSync(path.join(OPTIONS_DIR, 'options.css'), 'utf8');
+  const viewport = (css.match(/#vsc-viewport \{([^}]*)\}/) || [])[1] || '';
+  const missing = ['position: fixed;', 'top: 0;', 'right: 0;', 'bottom: 0;', 'left: 0;', 'overflow: auto;'].filter((d) => !viewport.includes(d));
+  expect('the page viewport is pinned to the window edges and scrolls', missing.concat(viewport.includes('-moz-box-flex') ? ['-moz-box-flex'] : []), []);
+  const doc = new JSDOM(xul, { contentType: 'application/xml' }).window.document;
+  expect('options.xul is a XUL window holding the page as XHTML', [doc.getElementsByTagName('parsererror').length, doc.documentElement.namespaceURI, doc.getElementById('vsc-body').namespaceURI, doc.documentElement.getAttribute('title')], [0, 'http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul', 'http://www.w3.org/1999/xhtml', 'Video Speed Controller: Options']);
 }
 
 console.log(failures ? `\n${failures} expectation(s) FAILED` : '\nall expectations passed');

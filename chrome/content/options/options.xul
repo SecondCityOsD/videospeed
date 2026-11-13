@@ -1,24 +1,29 @@
-<!doctype html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <title>Video Speed Controller: Options</title>
-    <link rel="stylesheet" href="options.css" />
-    <!-- UXP: upstream bundles these into one options.js. Load order matters:
-         chrome-storage.js (the chrome.storage shim) must precede
-         storage-manager.js, which picks its backend when it loads. -->
-    <script src="resource://videospeed/utils/key-maps.js"></script>
-    <script src="resource://videospeed/styles/controller-css-defaults.js"></script>
-    <script src="resource://videospeed/utils/constants.js"></script>
-    <script src="resource://videospeed/utils/logger.js"></script>
-    <script src="chrome-storage.js"></script>
-    <script src="resource://videospeed/core/storage-manager.js"></script>
-    <script src="resource://videospeed/core/settings.js"></script>
-    <script src="row-renderer.js"></script>
-    <script src="options.js"></script>
-  </head>
+<?xml version="1.0" encoding="utf-8"?>
+<?xml-stylesheet href="options.css" type="text/css"?>
+<!-- UXP: upstream's options.html as a XUL document. The page's own markup is
+     XHTML (the default namespace from #vsc-viewport down), laid out as in an
+     HTML document: #vsc-viewport stands in for the scrolling viewport and
+     paints the canvas background, #vsc-html and #vsc-body for <html> and
+     <body> (options.css). -->
+<window xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul"
+        id="vsc-options"
+        title="Video Speed Controller: Options">
+  <!-- UXP: upstream bundles these into one options.js. Load order matters:
+       chrome-storage.js (the chrome.storage shim) must precede
+       storage-manager.js, which picks its backend when it loads. -->
+  <script type="application/javascript" src="resource://videospeed/utils/key-maps.js"/>
+  <script type="application/javascript" src="resource://videospeed/styles/controller-css-defaults.js"/>
+  <script type="application/javascript" src="resource://videospeed/utils/constants.js"/>
+  <script type="application/javascript" src="resource://videospeed/utils/logger.js"/>
+  <script type="application/javascript" src="chrome-storage.js"/>
+  <script type="application/javascript" src="resource://videospeed/core/storage-manager.js"/>
+  <script type="application/javascript" src="resource://videospeed/core/settings.js"/>
+  <script type="application/javascript" src="row-renderer.js"/>
+  <script type="application/javascript" src="options.js"/>
 
-  <body>
+  <div id="vsc-viewport" xmlns="http://www.w3.org/1999/xhtml" tabindex="-1">
+  <div id="vsc-html">
+  <div id="vsc-body">
     <header>
       <nav class="header-tabs">
         <img src="chrome://videospeed/skin/icon48.png" alt="" class="header-icon" />
@@ -29,12 +34,12 @@
       <div class="split-button">
         <button id="save" class="split-primary">Save</button>
         <button id="split-toggle" class="split-arrow" aria-label="More actions">&#9662;</button>
-        <div id="split-menu" class="split-dropdown" hidden>
+        <div id="split-menu" class="split-dropdown" hidden="hidden">
           <button id="import">Import</button>
           <button id="export">Export</button>
           <button id="restore">Reset</button>
         </div>
-        <input type="file" id="importFile" accept=".json" hidden />
+        <input type="file" id="importFile" accept=".json" hidden="hidden" />
       </div>
     </header>
 
@@ -206,7 +211,7 @@ vsc-controller { top: 50px !important; }
           <h4 id="faq-remember">How does "Remember playback speed" interact with site rules?</h4>
           <p>
             When <code>rememberSpeed</code> is <strong>off</strong> (default), each page load starts
-            at 1x &mdash; or the site rule speed if one matches. Your in-session speed changes apply
+            at 1x &#8212; or the site rule speed if one matches. Your in-session speed changes apply
             to all new videos but are forgotten on page reload.
           </p>
           <p>
@@ -257,22 +262,22 @@ vsc-controller { top: 50px !important; }
           <p>Common causes:</p>
           <ul>
             <li>
-              The site is in your <strong>Site rules</strong> with Disable checked &mdash; remove or
+              The site is in your <strong>Site rules</strong> with Disable checked &#8212; remove or
               uncheck it.
             </li>
             <li>
-              The site uses Flash or a non-HTML5 player &mdash; the extension only works with native
+              The site uses Flash or a non-HTML5 player &#8212; the extension only works with native
               <code>&lt;video&gt;</code> and <code>&lt;audio&gt;</code> elements.
             </li>
             <li>
-              <code>Hide controller by default</code> is enabled &mdash; press your display toggle
+              <code>Hide controller by default</code> is enabled &#8212; press your display toggle
               shortcut (default: <code>V</code>) to show it.
             </li>
           </ul>
 
           <h4 id="faq-spa">Speed resets when I navigate on YouTube or similar single-page apps?</h4>
           <p>
-            YouTube uses SPA navigation &mdash; the page doesn't fully reload, but the player may
+            YouTube uses SPA navigation &#8212; the page doesn't fully reload, but the player may
             reinitialize. The extension restores speed from the in-session value automatically. If
             speed still resets, enable <code>rememberSpeed</code> in Preferences to persist speed
             across navigations and sessions.
@@ -291,5 +296,7 @@ vsc-controller { top: 50px !important; }
         </div>
       </section>
     </div>
-  </body>
-</html>
+  </div>
+  </div>
+  </div>
+</window>

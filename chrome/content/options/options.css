@@ -53,7 +53,34 @@
   box-sizing: border-box;
 }
 
-html {
+/* UXP: options.xul. The XUL window and #vsc-viewport stand in for the HTML
+   document's root and scrolling viewport: the viewport is pinned to the
+   window's edges and scrolls the page — fixed, because as a box child of the
+   XUL window it would be laid out at its full content height and never
+   scroll — and paints the canvas background (an HTML root background covers
+   the whole viewport). It also restores what an HTML page starts from: the
+   medium font size (XUL windows use the small UI font) and selectable text
+   (XUL turns selection off). options.js focuses it so the keyboard scrolls
+   it. #vsc-html and #vsc-body take upstream's html and body rules. */
+window {
+  -moz-appearance: none;
+  background-color: var(--md-surface);
+}
+
+#vsc-viewport {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  overflow: auto;
+  outline: none;
+  background-color: var(--md-surface);
+  font-size: medium;
+  -moz-user-select: text;
+}
+
+#vsc-html {
   max-width: 720px;
   padding: 0 1em;
   margin: auto;
@@ -71,7 +98,7 @@ html {
   -moz-osx-font-smoothing: grayscale;
 }
 
-body {
+#vsc-body {
   margin: 0;
   padding: 0 20px 40px;
 }

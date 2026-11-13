@@ -25,7 +25,7 @@
  * while its callback runs. Not emulated: chrome.storage.sync's quotas, a
  * Chrome sync limit (the page keeps its own 8 KB guard on custom CSS).
  *
- * options.html loads this before storage-manager.js, which picks its backend
+ * options.xul loads this before storage-manager.js, which picks its backend
  * (chrome.storage or the page bridge) when it loads.
  */
 (function () {

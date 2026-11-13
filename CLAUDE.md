@@ -22,7 +22,7 @@ build-xpi.ps1, build.sh             # XPI builders (same rules)
 chrome/
   content/overlay.xul, overlay.js   # toolbar button + panel; chrome-side bridge
   content/popup/                    # XUL toolbar panel (tracks upstream popup)
-  content/options/                  # upstream's HTML settings page (generated)
+  content/options/                  # upstream's settings page as XUL (generated)
     chrome-storage.js               #   fork-native chrome.storage shim
   modules/VSCPrefs.jsm              # prefs: read/write/observe, migrations
   skin/classic/                     # icons, toolbar CSS
@@ -44,7 +44,7 @@ into `styles/controller-css-defaults.js`).
 ## How the code is produced
 
 **Generated, never hand-edited:** every `src/**` file except the two
-fork-native ones, plus `chrome/content/options/{options.html,options.css,
+fork-native ones, plus `chrome/content/options/{options.xul,options.css,
 options.js,row-renderer.js}`. `tools/port-upstream.mjs` holds a registry:
 upstream path → exact-match edits (each asserted to match once, or `count`
 times for `{every}`), optional `dest`, IIFE wrap (`wrap: false` for HTML/CSS,
@@ -130,9 +130,17 @@ attribute), because `.vsc-ctrl`'s display is locked inline with `!important`.
 Its CSS comes from the controller sheets above. Drag starts on the speed badge
 only (mousedown + document capture).
 
-**Settings page.** `chrome://videospeed/content/options/options.html`, opened
+**Settings page.** `chrome://videospeed/content/options/options.xul`, opened
 in a tab (`em:optionsType` 3; the popup uses `switchToTabHavingURI`, like
-`openOptionsPage()`), chrome-privileged. Loads `resource://videospeed/` modules
+`openOptionsPage()`), chrome-privileged. A XUL document generated from
+upstream's `options.html`: upstream's markup as XHTML inside the XUL `window`,
+in `#vsc-viewport` (scrolling viewport, canvas background, `medium` font,
+selectable text) › `#vsc-html` › `#vsc-body`, which take upstream's `html` /
+`body` rules — so it looks and behaves like the HTML page. In a XUL document
+`document.createElement()` makes XUL elements and `document.body` is null:
+the scripts use `createHTMLElement()` (row-renderer.js) and `pageBody()`;
+`innerHTML` parses as XML (the CSS highlighter falls back to plain text).
+Loads `resource://videospeed/` modules
 plus `chrome-storage.js`, which gives upstream's unchanged storage-manager /
 settings a `chrome.storage` over the prefs: `get` sees only user-set prefs,
 absent keys take the caller's defaults, results are copies; keys without a pref
@@ -157,6 +165,10 @@ page). The overlay alone sets the toolbar icon.
 - **`:has()` selector lists** drop the whole rule on engines without `:has()`
   — split them (controller CSS) or use classes (options page).
 - **No Constructable Stylesheets / adoptedStyleSheets / Shadow DOM** on UXP.
+- **HTML inside a XUL window:** an HTML element laid out as a XUL box child
+  grows to its full content height, so `overflow: auto` on it never scrolls.
+  `options.xul`'s `#vsc-viewport` is `position: fixed` with all four edges at
+  0 instead (and focused on load for keyboard scrolling).
 - **Stylesheet `!important` beats normal inline styles**: the controller's
   `top`/`left` rules must not be `!important` (drag writes them inline).
 - **Pref types:** read through `VSCPrefs.getAll()` / typed getters, never
@@ -239,11 +251,13 @@ capturing); the options FAQ's "remember speed" answer contradicted
 Confirmed by the user in Pale Moon (2026-11-13): the controller sheets attach
 and style the controller, also on VORAPIS V3 YouTube pages; the settings
 handshake works (chrome listeners added with `wantsUntrusted` receive page
-CustomEvents); keyboard shortcuts work; the options page opens in a tab.
+CustomEvents); keyboard shortcuts work; the options page (then HTML) opens in
+a tab.
 
 Still unverified (not provable in jsdom): the bridge `WeakMap` keeps identity
 for content documents across frame walks (popup commands into embedded
-players); the options page's blob export downloads, its layout (flex `gap`,
-`:focus-visible`) looks right, and without `beforeinput` the speed fields
-filter via keypress/paste; the popup draws on the panel background, fits its
-height and refreshes on every opening.
+players); `options.xul` looks exactly like the HTML page did (viewport fill and
+scrolling, sticky header, font size, `#faq-…` links scroll to their answers),
+its blob export downloads, and without `beforeinput` the speed fields filter
+via keypress/paste; the popup draws on the panel background, fits its height
+and refreshes on every opening.
