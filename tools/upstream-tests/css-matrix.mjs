@@ -31,14 +31,9 @@ for (const rel of [
 const VSC = window.VSC;
 const CV = VSC.ControllerVisibility;
 
-// Stylesheets in document order: the shared controller sheet is inserted
-// first, then inject.js's host sheet (preprocessed here for youtube.com).
-VSC.ShadowDOMManager.ensureCSS(window.document);
-const sharedCSS = window.document.getElementById('vsc-controller-style').textContent;
-const hostCSS = VSC.Constants.DEFAULT_CONTROLLER_CSS.replace(
-  /:root\[style\*='--vsc-domain:\s*"([^"]+)"'\]([^{]*)\{([^}]*)\}/g,
-  (m, domain, selector, body) => (domain === 'youtube.com' ? `${selector.trim()} {${body}}` : '')
-);
+// The controller sheet overlay.js attaches on youtube.com: the inner
+// controller CSS, then the host and site rules preprocessed for that host.
+const sheetCSS = VSC.controllerSheetCSS('www.youtube.com');
 
 function parseRules(css) {
   const rules = [];
@@ -69,7 +64,7 @@ function specificity(sel) {
   return ids * 1e6 + cls * 1e3 + types;
 }
 
-const rules = [...parseRules(sharedCSS), ...parseRules(hostCSS)].map((r, order) => ({
+const rules = parseRules(sheetCSS).map((r, order) => ({
   ...r,
   order,
   spec: specificity(r.selector),

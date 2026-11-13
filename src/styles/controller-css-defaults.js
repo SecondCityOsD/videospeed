@@ -30,11 +30,18 @@
  *     normal-priority as upstream, so site overrides, the visibility layer
  *     and the user's custom CSS can still change them.
  *   - stripCSSImports() (below): upstream applies CSS through
- *     CSSStyleSheet#replaceSync(), which drops @import rules; the fork's
- *     <style> elements would load them.
+ *     CSSStyleSheet#replaceSync(), which drops @import rules.
  *
- * Inner-controller layout and the visibility precedence (upstream's shadow
- * CSS) live in ui/shadow-dom.js.
+ * Also here: CONTROLLER_CSS, the inner-controller layout and visibility
+ * precedence (upstream's shadow-root stylesheet), and the builders for the two
+ * sheets overlay.js loads into a page (controllerSheetCSS, customSheetCSS).
+ * Upstream's CSS is out of the page's reach — manifest CSS and adopted
+ * stylesheets are not DOM nodes — so the fork does not put it in <style>
+ * elements either: overlay.js attaches these as author sheets
+ * (nsIDOMWindowUtils.loadSheetUsingURIString), which a page cannot remove,
+ * block or disable (the VORAPIS V3 YouTube layout sweeps every <style>), and
+ * which page CSP does not govern. overlay.js loads this file into a sandbox
+ * to build them; the page loads it for DEFAULT_CONTROLLER_CSS.
  */
 
 // Wrapped like every src/ module: keeps DEFAULT_CONTROLLER_CSS out of the
@@ -358,8 +365,187 @@ function stripCSSImports(css) {
   return copied === 0 ? css : out + css.slice(copied);
 }
 
+/**
+ * Inner-controller CSS — upstream's shadow-root stylesheet, as plain-DOM rules.
+ *
+ * Layout properties carry !important because the controller lives in the
+ * page's CSS world (no shadow DOM in this port). Hostile sites such as YouTube
+ * have broad selectors like `[class] { display: block }` or
+ * `flex-direction: column` rules that catch our class names; without
+ * !important on display/flex-direction/float/width the controller collapses
+ * into a vertical column there. Every selector is rooted at
+ * `.vsc-controller .vsc-controller-inner` for a specificity floor of (0, 3, 0),
+ * which beats common userscript reskin selectors like `.html5-video-player *`
+ * (0, 1, 1) and most attribute/class-broad rules (VORAPIS V3, Tampermonkey UI
+ * patches). Sites that need to override us would have to use !important *and*
+ * match our class chain.
+ *
+ * Opacity deliberately stays normal-priority, as in upstream: the inline
+ * opacity on .vsc-ctrl then outranks the :hover / .dragging rules, so the
+ * controller keeps the configured opacity exactly like upstream's.
+ */
+const CONTROLLER_CSS =
+  '.vsc-controller .vsc-controller-inner,' +
+  '.vsc-controller .vsc-controller-inner * {' +
+    'line-height: 1.8em !important;' +
+    'font-family: sans-serif !important;' +
+    'font-size: 13px !important;' +
+    'box-sizing: border-box !important;' +
+    'float: none !important;' +
+    'clear: none !important;' +
+    'vertical-align: middle !important;' +
+    // Neutralize page-applied transforms / zoom on our own subtree.
+    // (Ancestor transforms are escaped by VideoController's
+    // transformed-ancestor re-parenting.)
+    'transform: none !important;' +
+    'zoom: 1 !important;' +
+  '}' +
+  // Visibility precedence — upstream keys these on :host(...) state inside the
+  // shadow stylesheet. The plain-DOM equivalent targets the inner container
+  // (the shadow-root stand-in) from the host's classes and data-vsc-visibility
+  // attribute. Equal specificity, so source order is the precedence
+  // (docs/controller-visibility.md):
+  //   automatic hide  <  explicit SHOW / flash  <  explicit HIDE / no source
+  // The container — not .vsc-ctrl — carries them because .vsc-ctrl's display
+  // is locked inline with !important (shadow-dom.js lockSize), which no
+  // stylesheet rule can override. .vsc-ctrl keeps its own inline opacity, so
+  // restoring the container to opacity 1 renders the configured value.
+  '.vsc-controller.vsc-hidden > .vsc-controller-inner {' +
+    'display: none !important; visibility: hidden !important; opacity: 0 !important;' +
+  '}' +
+  '.vsc-controller[data-vsc-visibility="show"] > .vsc-controller-inner,' +
+  '.vsc-controller.vsc-show > .vsc-controller-inner {' +
+    'display: block !important; visibility: visible !important; opacity: 1 !important;' +
+  '}' +
+  '.vsc-controller[data-vsc-visibility="hide"] > .vsc-controller-inner,' +
+  '.vsc-controller.vsc-nosource > .vsc-controller-inner {' +
+    'display: none !important; visibility: hidden !important; opacity: 0 !important;' +
+  '}' +
+  '.vsc-controller .vsc-controller-inner .vsc-ctrl {' +
+    'position: absolute !important;' +
+    // top/left seeded inline by createShadowDOM / VideoController and mutated
+    // inline by drag-handler.js — MUST NOT be !important here (stylesheet
+    // !important outranks normal-priority inline styles and would freeze the
+    // controller at 0,0).
+    'top: 0; left: 0;' +
+    'display: inline-block !important;' +
+    'background: black !important; color: white !important;' +
+    'border-radius: 6px !important; padding: 4px !important;' +
+    'margin: 10px 10px 10px 15px !important;' +
+    // Only the speed badge is a drag handle (upstream 0.11).
+    'cursor: default !important;' +
+    'z-index: 9999999 !important;' +
+    'white-space: nowrap !important;' +
+    'width: auto !important; max-width: none !important;' +
+    'height: auto !important; max-height: none !important;' +
+  '}' +
+  '.vsc-controller .vsc-controller-inner .vsc-ctrl:hover {' +
+    'opacity: 0.7;' +
+  '}' +
+  '.vsc-controller .vsc-controller-inner .vsc-ctrl:hover > .vsc-draggable {' +
+    'margin-right: 0.8em !important;' +
+  '}' +
+  '.vsc-controller .vsc-controller-inner .vsc-controls {' +
+    'display: none !important;' +
+    'flex-direction: row !important;' +
+    'align-items: center !important;' +
+    'vertical-align: middle !important;' +
+    'width: auto !important; height: auto !important;' +
+  '}' +
+  '.vsc-controller .vsc-controller-inner .vsc-ctrl:hover .vsc-controls,' +
+  '.vsc-controller .vsc-controller-inner .vsc-ctrl.dragging .vsc-controls {' +
+    'display: inline-flex !important;' +
+    'flex-direction: row !important;' +
+    'align-items: center !important;' +
+  '}' +
+  // Unprefixed grab/grabbing follow each -webkit- value: Goanna may not accept
+  // the WebKit keywords, and the last valid declaration wins.
+  '.vsc-controller .vsc-controller-inner .vsc-ctrl.dragging {' +
+    'cursor: -webkit-grabbing !important; cursor: grabbing !important; opacity: 0.7;' +
+  '}' +
+  '.vsc-controller .vsc-controller-inner .vsc-draggable {' +
+    'display: inline-flex !important;' +
+    'flex-direction: row !important;' +
+    'align-items: center !important; justify-content: center !important;' +
+    'cursor: -webkit-grab !important; cursor: grab !important;' +
+    'max-width: none !important;' +
+    'text-align: center !important; vertical-align: middle !important;' +
+    'touch-action: none !important;' +
+  '}' +
+  '.vsc-controller .vsc-controller-inner .vsc-draggable:active {' +
+    'cursor: -webkit-grabbing !important; cursor: grabbing !important;' +
+  '}' +
+  '.vsc-controller .vsc-controller-inner .vsc-btn {' +
+    'display: inline-block !important;' +
+    'flex: 0 0 auto !important;' +
+    'opacity: 1 !important; cursor: pointer !important;' +
+    'color: black !important; background: white !important;' +
+    'font-weight: normal !important; border-radius: 5px !important;' +
+    'padding: 1px 5px 3px 5px !important;' +
+    'border: 0px solid white !important;' +
+    'font-family: "Lucida Console", Monaco, monospace !important;' +
+    'margin: 0px 2px 2px 2px !important;' +
+    'transition: background 0.2s, color 0.2s !important;' +
+    'width: auto !important; min-width: 0 !important;' +
+    'height: auto !important; min-height: 0 !important;' +
+    'text-align: center !important;' +
+  '}' +
+  '.vsc-controller .vsc-controller-inner .vsc-btn:focus {' +
+    'outline: 0 !important;' +
+  '}' +
+  '.vsc-controller .vsc-controller-inner .vsc-btn:hover {' +
+    'opacity: 1 !important; background: #2196f3 !important; color: #ffffff !important;' +
+  '}' +
+  '.vsc-controller .vsc-controller-inner .vsc-btn:active {' +
+    'background: #2196f3 !important; color: #ffffff !important; font-weight: bold !important;' +
+  '}' +
+  '.vsc-controller .vsc-controller-inner .vsc-btn.rw {' +
+    'opacity: 0.65 !important;' +
+  '}';
+
+/**
+ * Upstream content/inject.js#preprocessDomainCSS, verbatim: keep the rules
+ * whose domain marker names this host (marker stripped), drop the others.
+ * Copied because overlay.js builds the sheet without a page; smoke.mjs checks
+ * it against upstream's method.
+ * @param {string} css
+ * @param {string} hostname
+ * @returns {string}
+ */
+function preprocessDomainCSS(css, hostname) {
+  const normalizedHostname = hostname.replace(/^www\./, '');
+  return css.replace(
+    /:root\[style\*='--vsc-domain:\s*"([^"]+)"'\]([^{]*)\{([^}]*)\}/g,
+    (match, domain, selector, body) =>
+      domain === normalizedHostname ? `${selector.trim()} {${body}}` : ''
+  );
+}
+
+/**
+ * The controller sheet for a host: the inner-controller CSS, then upstream's
+ * host + site rules for that host (upstream: shadow stylesheet, manifest
+ * inject.css and the adopted defaults sheet), in that cascade order.
+ * @param {string} hostname
+ * @returns {string}
+ */
+function controllerSheetCSS(hostname) {
+  return CONTROLLER_CSS + '\n' + preprocessDomainCSS(DEFAULT_CONTROLLER_CSS, hostname);
+}
+
+/**
+ * The user's custom-CSS sheet (upstream: the adopted custom sheet, loaded
+ * after the controller sheet). @import rules dropped, as replaceSync() does.
+ * @param {string} customCSS
+ * @returns {string}
+ */
+function customSheetCSS(customCSS) {
+  return stripCSSImports(customCSS || '');
+}
+
 window.VSC = window.VSC || {};
 window.VSC.DEFAULT_CONTROLLER_CSS = DEFAULT_CONTROLLER_CSS;
 window.VSC.stripCSSImports = stripCSSImports;
+window.VSC.controllerSheetCSS = controllerSheetCSS;
+window.VSC.customSheetCSS = customSheetCSS;
 
 })();

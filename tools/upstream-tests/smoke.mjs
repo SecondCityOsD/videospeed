@@ -55,9 +55,14 @@ async function boot(seed) {
   }
 
   const ctx = dom.getInternalVMContext();
-  // Answer the settings handshake as overlay.js's bridge does (bridge.mjs
-  // tests the real bridge).
+  // Answer the settings handshake as overlay.js's bridge does, attaching the
+  // controller sheet first (bridge.mjs tests the real bridge). In Pale Moon
+  // that sheet is an author sheet outside the DOM; a marked <style> stands in.
   window.document.documentElement.addEventListener('VSC_REQUEST_SETTINGS', () => {
+    const sheet = window.document.createElement('style');
+    sheet.setAttribute('data-author-sheet', 'controller');
+    sheet.textContent = window.VSC.controllerSheetCSS(window.location.hostname);
+    window.document.head.appendChild(sheet);
     window.document.documentElement.dispatchEvent(
       new window.CustomEvent('VSC_SETTINGS_READY', {
         detail: window.JSON.parse(JSON.stringify({ settings: seed, hostname: 'example.com' })),
@@ -175,7 +180,7 @@ function expect(label, actual, wanted) {
   expect('popup TOGGLE_DISPLAY flips explicit intent', vis(), 'hide');
 
   await msg('VSC_TEARDOWN');
-  expect('teardown removes the controller and every VSC stylesheet', [!!video.vsc, doc.querySelectorAll('vsc-controller').length, doc.querySelectorAll('style[id^="vsc-controller"]').length, window.VSC_controller.acceptingMedia], [false, 0, 0, false]);
+  expect('teardown removes every controller and stops accepting media', [!!video.vsc, doc.querySelectorAll('vsc-controller').length, window.VSC_controller.acceptingMedia], [false, 0, false]);
   const late = doc.createElement('video');
   late.src = 'b.mp4';
   doc.getElementById('p').appendChild(late);
@@ -201,15 +206,19 @@ function expect(label, actual, wanted) {
   window.close();
 }
 
-// --- Custom CSS ---------------------------------------------------------------
+// --- Controller CSS ------------------------------------------------------------
+// overlay.js attaches the sheets (bridge.mjs); here: the page adds none of its
+// own, and the shared builders match upstream.
 {
-  const { window, errors } = await boot({ enabled: true, logLevel: 2, customCSS: '@import url(https://example.invalid/x.css);\nvsc-controller { top: 3px; }' });
-  const custom = window.document.getElementById('vsc-controller-custom');
-  expect('custom CSS lands without @import (upstream replaceSync drops it)', custom && custom.textContent, '\nvsc-controller { top: 3px; }');
-  window.document.documentElement.dispatchEvent(
-    new window.CustomEvent('VSC_STORAGE_CHANGED', { detail: { customCSS: { newValue: '@import "y.css"; vsc-controller { left: 1px; }' } } })
-  );
-  expect('live custom-CSS updates drop @import too', custom.textContent, ' vsc-controller { left: 1px; }');
+  const { window, errors, video } = await boot({ enabled: true, logLevel: 2, customCSS: 'vsc-controller { top: 3px; }' });
+  const VSC = window.VSC;
+  expect('the page scripts add no <style> of their own', window.document.querySelectorAll('style:not([data-author-sheet])').length, 0);
+  expect('the controller is styled from the controller sheet', window.getComputedStyle(video.vsc.div).position, 'absolute');
+  const hosts = ['www.youtube.com', 'youtube.com', 'www.youtube-nocookie.com', 'youtube.googleapis.com', 'www.netflix.com', 'www.example.com'];
+  const upstream = (host) => window.VSC_controller.preprocessDomainCSS(VSC.Constants.DEFAULT_CONTROLLER_CSS, host);
+  expect("the sheet's host and site rules are upstream's preprocessDomainCSS() output", hosts.filter((h) => !VSC.controllerSheetCSS(h).endsWith('\n' + upstream(h))), []);
+  expect('YouTube rules only on YouTube', ['www.youtube.com', 'www.example.com'].map((h) => VSC.controllerSheetCSS(h).includes('.ytp-hide-info-bar > vsc-controller')), [true, false]);
+  expect('the custom sheet drops @import (upstream replaceSync)', VSC.customSheetCSS('@import url(https://example.invalid/x.css);\nvsc-controller { top: 3px; }'), '\nvsc-controller { top: 3px; }');
   // [input, expected]: top-level @import statements go, wherever they sit;
   // strings, comments, blocks and look-alikes stay.
   const cases = [
@@ -236,7 +245,7 @@ function expect(label, actual, wanted) {
     ['@foo{} @import url(x); .b{}', '@foo{}  .b{}'],
   ];
   expect('stripCSSImports edge cases', cases.filter(([css, want]) => window.VSC.stripCSSImports(css) !== want).map(([css]) => css), []);
-  expect('no page errors with custom CSS', errors, []);
+  expect('no page errors with the controller CSS', errors, []);
   window.close();
 }
 

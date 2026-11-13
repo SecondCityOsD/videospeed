@@ -74,6 +74,24 @@ function makePage(chrome, url) {
   for (const p of ['offsetWidth', 'clientWidth']) Object.defineProperty(window.HTMLElement.prototype, p, { configurable: true, get: () => 640 });
   for (const p of ['offsetHeight', 'clientHeight']) Object.defineProperty(window.HTMLElement.prototype, p, { configurable: true, get: () => 360 });
 
+  // nsIDOMWindowUtils author sheets, as Gecko keeps them: a per-document list
+  // outside the DOM (loading one twice is an error). `sheets` holds their CSS.
+  const sheetURIs = [];
+  const windowUtils = {
+    AUTHOR_SHEET: 2,
+    loadSheetUsingURIString(uri, type) {
+      if (type !== 2) throw new Error(`unexpected sheet type ${type}`);
+      if (sheetURIs.includes(uri)) throw new Error('NS_ERROR_INVALID_ARG: sheet already loaded');
+      sheetURIs.push(uri);
+    },
+    removeSheetUsingURIString(uri) {
+      const at = sheetURIs.indexOf(uri);
+      if (at !== -1) sheetURIs.splice(at, 1);
+    },
+  };
+  window.QueryInterface = () => ({ getInterface: () => windowUtils });
+  const sheets = () => sheetURIs.map((uri) => decodeURIComponent(uri.replace('data:text/css;charset=utf-8,', '')));
+
   const doc = window.document;
   const ready = [];
   doc.documentElement.addEventListener('VSC_SETTINGS_READY', (e) => ready.push(JSON.parse(JSON.stringify(e.detail))));
@@ -85,7 +103,7 @@ function makePage(chrome, url) {
       new vm.Script(fs.readFileSync(path.join(repoRoot, 'src', rel), 'utf8'), { filename: rel }).runInContext(ctx);
     }
   }
-  return { window, doc, video: doc.querySelector('video'), injected, pageErrors, pageWarnings, ready, frames: [] };
+  return { window, doc, video: doc.querySelector('video'), injected, pageErrors, pageWarnings, ready, sheets, frames: [] };
 }
 
 const asWindow = (page) => ({ document: page.doc, frames: page.frames.map(asWindow) });
@@ -122,7 +140,7 @@ function selectTab(chrome, page) {
   expect('non-numeric lastSpeed is ignored', chrome.user.get('lastSpeed'), '16');
 
   chrome.VSCPrefs.set('customCSS', 'vsc-controller { top: 5px; }');
-  expect('live pref change reaches the page (custom CSS sheet)', top.doc.getElementById('vsc-controller-custom') && top.doc.getElementById('vsc-controller-custom').textContent, 'vsc-controller { top: 5px; }');
+  expect('live pref change reaches the page settings and the custom sheet', [top.window.VSC.videoSpeedConfig.settings.customCSS, top.sheets()[1]], ['vsc-controller { top: 5px; }', 'vsc-controller { top: 5px; }']);
 
   chrome.overlay.sendToSelectedTab({ type: 'VSC_SET_SPEED', payload: { speed: 2 } });
   expect('popup command reaches the top page and its frame', [top.video.playbackRate, frame.video.playbackRate], [2, 2]);
@@ -217,6 +235,108 @@ function selectTab(chrome, page) {
   // disable nothing until the options page saves once; the fork applies them
   // from the start, as its options page shows them.
   expect('the shipped default rules apply from the start', blocked.injected, 0);
+}
+
+// --- 5. Documents that replace their <html> (document.write apps, page rebuilders) -------
+// jsdom keeps the window across these (Chrome's behavior); what chrome code sees
+// in Gecko — a new root, and a second DOMContentLoaded after document.open() /
+// write() — is simulated directly.
+{
+  const chrome = makeChrome();
+  chrome.overlay.init();
+  const tick500 = () => tick(500);
+  const scripts = (doc) => doc.querySelectorAll('script[src^="resource://videospeed/"]').length;
+  const newRoot = (doc) => {
+    const html = doc.createElement('html');
+    html.appendChild(doc.createElement('head'));
+    html.appendChild(doc.createElement('body'));
+    doc.replaceChild(html, doc.documentElement);
+    return html;
+  };
+  const answers = (root) => {
+    const got = [];
+    root.addEventListener('VSC_SETTINGS_READY', (e) => got.push(JSON.parse(JSON.stringify(e.detail))));
+    return got;
+  };
+
+  // In-place swap, scripts alive: nothing is injected again, and both sides
+  // keep talking on the original root.
+  const live = makePage(chrome, 'https://www.example.com/watch');
+  selectTab(chrome, live);
+  await tick500();
+  const injectedOnce = scripts(live.doc);
+  chrome.overlay.handleEvent({ type: 'DOMContentLoaded', originalTarget: live.doc });
+  expect('a repeated DOMContentLoaded on the same root adds nothing', [injectedOnce, scripts(live.doc)], [32, 32]);
+  newRoot(live.doc);
+  const video = live.doc.createElement('video');
+  video.src = 'b.mp4';
+  live.doc.body.appendChild(video);
+  await tick(1300);
+  expect('a video in the swapped-in <html> gets a controller', !!video.vsc, true);
+  expect('the controller sheet belongs to the document, not to the swapped <html>', live.sheets().length, 1);
+  chrome.overlay.sendToSelectedTab({ type: 'VSC_SET_SPEED', payload: { speed: 2 } });
+  await tick();
+  expect('popup commands still reach the page', video.playbackRate, 2);
+  expect('no second injection without a new DOMContentLoaded', scripts(live.doc), 0);
+
+  // document.open()/write(): new root + DOMContentLoaded again → fresh injection
+  // and a fresh bridge on the new root.
+  const reopened = makePage(chrome, 'https://www.example.org/app');
+  await tick500();
+  const root2 = newRoot(reopened.doc);
+  const got = answers(root2);
+  chrome.overlay.handleEvent({ type: 'DOMContentLoaded', originalTarget: reopened.doc });
+  root2.dispatchEvent(new reopened.window.CustomEvent('VSC_REQUEST_SETTINGS'));
+  expect('a re-opened document is injected again and answered on its new root', [scripts(reopened.doc), got.length, !!(got[0] && got[0].settings)], [32, 1, true]);
+  expect('…with its controller sheet replaced, not loaded twice', [reopened.sheets().length, chrome.errors], [1, []]);
+
+  // Disabled while open: stays reload-only, as upstream's bridge keeps it.
+  const off = makePage(chrome, 'https://www.example.net/');
+  selectTab(chrome, off);
+  await tick500();
+  chrome.VSCPrefs.set('enabled', false);
+  chrome.VSCPrefs.set('enabled', true);
+  newRoot(off.doc);
+  chrome.overlay.handleEvent({ type: 'DOMContentLoaded', originalTarget: off.doc });
+  expect('a document disabled while open is not injected again', scripts(off.doc), 0);
+  expect('no page errors around replaced documents', [...live.pageErrors, ...reopened.pageErrors, ...off.pageErrors], []);
+}
+
+// --- 6. Controller sheets ----------------------------------------------------------
+// Upstream's CSS is out of the page's reach (manifest CSS, adopted sheets); the
+// overlay attaches the fork's as nsIDOMWindowUtils author sheets.
+{
+  const chrome = makeChrome();
+  chrome.overlay.init();
+  const yt = makePage(chrome, 'https://www.youtube.com/watch?v=x');
+  const other = makePage(chrome, 'https://www.example.com/watch');
+  selectTab(chrome, yt);
+  chrome.gBrowser.browsers.push({ contentWindow: { document: other.doc, frames: [] } });
+  await tick(500);
+  const hasYouTubeRules = (css) => css.includes('.ytp-hide-info-bar > vsc-controller');
+  expect('an active page gets one controller sheet, and no <style> in its DOM', [yt.sheets().length, yt.doc.querySelectorAll('style').length], [1, 0]);
+  expect('the sheet holds the inner controller CSS and the host rules', ['.vsc-controller .vsc-controller-inner .vsc-ctrl {', 'vsc-controller {'].map((s) => yt.sheets()[0].includes(s)), [true, true]);
+  expect('site rules are preprocessed for the host (YouTube only on YouTube, no markers left)', [hasYouTubeRules(yt.sheets()[0]), hasYouTubeRules(other.sheets()[0]), yt.sheets()[0].includes('--vsc-domain')], [true, false, false]);
+  expect('the controller is styled by it', yt.window.VSC.controllerSheetCSS('www.youtube.com'), yt.sheets()[0]);
+
+  chrome.VSCPrefs.set('customCSS', '@import url(https://example.invalid/x.css);\nvsc-controller { top: 3px; }');
+  expect('custom CSS becomes a second sheet, after the controller sheet, without @import', [yt.sheets().length, yt.sheets()[1], other.sheets()[1]], [2, '\nvsc-controller { top: 3px; }', '\nvsc-controller { top: 3px; }']);
+  chrome.VSCPrefs.set('customCSS', 'vsc-controller { left: 1px; }');
+  expect('a custom CSS change replaces that sheet', yt.sheets(), [yt.sheets()[0], 'vsc-controller { left: 1px; }']);
+  chrome.VSCPrefs.set('customCSS', '');
+  expect('clearing custom CSS removes it', yt.sheets().length, 1);
+
+  const later = makePage(chrome, 'https://www.example.org/');
+  chrome.gBrowser.browsers.push({ contentWindow: { document: later.doc, frames: [] } });
+  chrome.VSCPrefs.set('customCSS', 'vsc-controller { top: 9px; }');
+  await tick(500);
+  expect('a page loaded with custom CSS set gets both sheets', later.sheets().length, 2);
+
+  chrome.VSCPrefs.set('enabled', false);
+  expect('disabling removes every sheet', [yt.sheets().length, other.sheets().length, later.sheets().length], [0, 0, 0]);
+  chrome.VSCPrefs.set('enabled', true);
+  expect('re-enabling attaches nothing (reload-only)', yt.sheets().length, 0);
+  expect('no chrome or page errors with sheets', [chrome.errors, yt.pageErrors, other.pageErrors, later.pageErrors], [[], [], [], []]);
 }
 
 console.log(failures ? `\n${failures} expectation(s) FAILED` : '\nall expectations passed');

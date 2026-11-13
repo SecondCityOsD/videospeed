@@ -58,8 +58,9 @@ node tools/port-upstream.mjs --write    # regenerate (optionally list files)
 
 **Fork-native:** `src/ui/shadow-dom.js` (plain-DOM controller instead of a
 shadow root), `src/styles/controller-css-defaults.js` (upstream inject.css +
-site CSS, `:has()` lists split, `stripCSSImports()`), everything in `chrome/`
-except the generated options files.
+site CSS with `:has()` lists split, the inner controller CSS, `stripCSSImports()`
+and the sheet builders overlay.js uses), everything in `chrome/` except the
+generated options files.
 
 To follow a new upstream release: point the tools at the new checkout, run the
 check, fix each edit that no longer matches, regenerate, run all tests.
@@ -72,8 +73,34 @@ http/https/file documents (Meet/Hangouts excluded, as upstream's
 read prefs; if `enabled` is false or a site rule disables the URL (first
 matching rule decides; the legacy `blacklist` only while `siteRules` is
 absent), inject nothing. Otherwise register a bridge (chrome-side `WeakMap`
-doc → `{active, disabledForDocument}`) and append the page scripts as
-`<script src="resource://videospeed/…">` with `async = false`.
+doc → `{root, active, disabledForDocument}`) and append the page scripts as
+`<script src="resource://videospeed/…">` with `async = false`. Both sides talk
+on `bridge.root` (the `<html>` at injection) for the document's life, as
+upstream's bridge and page scripts capture it once.
+
+**Replaced documents.** `document.open()`/`write()` (e.g. the VORAPIS V3
+YouTube layout, sling.com) gives the document a new root and a second
+`DOMContentLoaded`; Gecko also gives it a new window, killing the injected
+scripts (Chrome keeps the window, so upstream only warns). The overlay injects
+again when `DOMContentLoaded` arrives with a new root, unless the document was
+disabled while open. An in-place `<html>` swap without a new window keeps the
+running scripts.
+
+**Controller sheets.** Upstream's CSS is out of the page's reach (manifest CSS,
+adopted stylesheets). The fork's counterpart: when a page goes active, the
+overlay attaches author sheets through `nsIDOMWindowUtils.loadSheetUsingURIString`
+(`data:` URIs; as Firefox's WebExtensions did for content-script CSS) — not
+DOM nodes, so a page cannot remove, block or disable them (VORAPIS V3 sweeps
+every `<style>` on YouTube, which left the controller unstyled and under the
+video), and page CSP does not apply. Two sheets, in cascade order:
+`controllerSheetCSS(hostname)` (inner controller CSS + upstream's host/site
+rules run through a verbatim copy of `preprocessDomainCSS`) and
+`customSheetCSS(customCSS pref)` (`@import` stripped), both from
+`controller-css-defaults.js` loaded into a chrome sandbox — the text never comes
+from the page. The custom sheet is swapped on pref change; both are removed on
+disable and before a re-opened document is injected again. Page-side
+`injectControllerCSS`/`setupCSSLiveUpdates` are no-ops; the page adds no
+`<style>` at all.
 
 **Settings bridge** — upstream's content-bridge protocol, CustomEvents on
 `document.documentElement`, chrome listeners added with `wantsUntrusted`:
@@ -100,9 +127,8 @@ epochs, fight budget), `ControllerVisibility`. Contracts:
 host, built as plain DOM (`shadow-dom.js`); `.vsc-controller-inner` stands in
 for the shadow root and carries the visibility rules (the `data-vsc-visibility`
 attribute), because `.vsc-ctrl`'s display is locked inline with `!important`.
-CSS goes into `<style>` elements (`inject.js#_appendStyle`), custom CSS with
-`@import` removed (replaceSync drops it). Drag starts on the speed badge only
-(mousedown + document capture).
+Its CSS comes from the controller sheets above. Drag starts on the speed badge
+only (mousedown + document capture).
 
 **Settings page.** `chrome://videospeed/content/options/options.html`, opened
 in a tab (`em:optionsType` 3; the popup uses `switchToTabHavingURI`, like
@@ -165,7 +191,7 @@ never install anything else without asking.
 
 | Command | What |
 |---|---|
-| `node tools/upstream-tests/sync.mjs` then `npx vitest run --reporter=json --outputFile=x.json` in the run dir | upstream's suite on the fork; 456 pass / 14 by-design failures (chrome.* bridge, blacklist/site-pattern, real shadow DOM, adoptedStyleSheets, upstream element names) |
+| `node tools/upstream-tests/sync.mjs` then `npx vitest run --reporter=json --outputFile=x.json` in the run dir | upstream's suite on the fork; 455 pass / 15 by-design failures (chrome.* bridge, blacklist/site-pattern, real shadow DOM, adoptedStyleSheets and page-side CSS injection — the overlay attaches the sheets, upstream element names) |
 | `node tools/upstream-tests/compare.mjs a.json b.json` | per-test fixes/regressions |
 | `classic-load.mjs` | scripts as classic scripts in one window: load errors, global leaks |
 | `smoke.mjs` | real boot on a playable video: shortcuts, R/G, V, popup messages, wheel, drag, teardown, custom CSS |
@@ -210,9 +236,14 @@ capturing); the options FAQ's "remember speed" answer contradicted
 
 ## Verify in real Pale Moon
 
-Not provable in jsdom: chrome listeners on content `documentElement` receive
-page CustomEvents (`wantsUntrusted`); the bridge `WeakMap` keeps identity for
-content documents across frame walks; the options page gets `Components`
-(system principal), its blob export downloads, its layout (flex `gap`,
+Confirmed by the user in Pale Moon (2026-11-13): the controller sheets attach
+and style the controller, also on VORAPIS V3 YouTube pages; the settings
+handshake works (chrome listeners added with `wantsUntrusted` receive page
+CustomEvents); keyboard shortcuts work; the options page opens in a tab.
+
+Still unverified (not provable in jsdom): the bridge `WeakMap` keeps identity
+for content documents across frame walks (popup commands into embedded
+players); the options page's blob export downloads, its layout (flex `gap`,
 `:focus-visible`) looks right, and without `beforeinput` the speed fields
-filter via keypress/paste; the popup refreshes on every opening.
+filter via keypress/paste; the popup draws on the panel background, fits its
+height and refreshes on every opening.

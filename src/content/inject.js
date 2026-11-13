@@ -266,66 +266,18 @@ class VideoSpeedExtension {
   }
 
   /**
-   * UXP: Pale Moon has no Constructable Stylesheets (new CSSStyleSheet /
-   * document.adoptedStyleSheets), so controller CSS goes in <style> elements.
-   * Same two-sheet split as upstream: _controllerSheet (built-in defaults,
-   * domain-preprocessed, never changes at runtime) and _customSheet (user
-   * additions, injected raw, live-updatable). @import rules are removed:
-   * replaceSync() drops them, a <style> element would load them.
-   * @param {string} css
-   * @param {string} [id]
-   * @returns {HTMLStyleElement}
-   * @private
+   * UXP: the controller sheets are not the page's to add. Upstream's CSS is out
+   * of the page's reach (manifest CSS, adopted stylesheets); the fork's
+   * counterpart is overlay.js loading them into the document as author sheets
+   * (nsIDOMWindowUtils), built by styles/controller-css-defaults.js: a page
+   * cannot remove, block or disable them (the VORAPIS V3 YouTube layout sweeps
+   * every <style>), and page CSP does not apply. overlay.js also swaps the
+   * custom sheet when the setting changes and removes both on teardown.
    */
-  _appendStyle(css, id) {
-    const styleEl = document.createElement('style');
-    if (id) {
-      styleEl.id = id;
-    }
-    styleEl.textContent = window.VSC.stripCSSImports(css);
-    (document.head || document.documentElement).appendChild(styleEl);
-    return styleEl;
-  }
+  injectControllerCSS() {}
 
-  injectControllerCSS() {
-    try {
-      if (this._controllerSheet) {
-        return;
-      }
-      this._controllerSheet = this._appendStyle(
-        this.preprocessDomainCSS(window.VSC.Constants.DEFAULT_CONTROLLER_CSS),
-        'vsc-controller-defaults'
-      );
-
-      const customCSS = this.config.settings.customCSS || '';
-      if (customCSS) {
-        this._customSheet = this._appendStyle(customCSS, 'vsc-controller-custom');
-      }
-    } catch (error) {
-      this.logger.error(`Failed to inject controller CSS: ${error.message}`);
-    }
-  }
-
-  /** Live-update the user's custom CSS when options are saved. */
-  setupCSSLiveUpdates() {
-    document.documentElement.addEventListener('VSC_STORAGE_CHANGED', (e) => {
-      const cssChange = e.detail && e.detail.customCSS;
-      if (!cssChange || cssChange.newValue === undefined || !this._controllerSheet) {
-        return;
-      }
-      const customCSS = cssChange.newValue || '';
-      if (customCSS) {
-        if (!this._customSheet) {
-          this._customSheet = this._appendStyle(customCSS, 'vsc-controller-custom');
-        } else {
-          this._customSheet.textContent = window.VSC.stripCSSImports(customCSS);
-        }
-      } else if (this._customSheet) {
-        this._customSheet.remove();
-        this._customSheet = null;
-      }
-    });
-  }
+  /** UXP: custom CSS updates are applied by overlay.js (see injectControllerCSS). */
+  setupCSSLiveUpdates() {}
 
   /**
    * Set up observers for DOM changes and video detection
@@ -470,17 +422,8 @@ class VideoSpeedExtension {
       this.siteHandlerManager.cleanup();
     }
 
-    // Remove controller CSS (both default and custom sheets). UXP: these are
-    // <style> elements, not adopted stylesheets.
-    if (this._controllerSheet) {
-      this._controllerSheet.remove();
-    }
-    if (this._customSheet) {
-      this._customSheet.remove();
-    }
-    // UXP: also the shared stylesheet ShadowDOMManager adds in place of
-    // per-controller shadow styles (upstream's leave with each shadow root).
-    window.VSC.ShadowDOMManager.removeCSS(document);
+    // UXP: overlay.js removes the controller sheets when it tears the page down
+    // (see injectControllerCSS).
     this._controllerSheet = null;
     this._customSheet = null;
 

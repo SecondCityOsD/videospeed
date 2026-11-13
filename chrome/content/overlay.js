@@ -25,6 +25,9 @@ Components.utils.import("chrome://videospeed-modules/content/VSCPrefs.jsm");
  *   - Site rules are resolved here and never reach the page; the page gets an
  *     already-matched `siteDefaultSpeed` instead of the raw `siteRules`.
  *   - The bridge registry is a chrome-side WeakMap, invisible to the page.
+ *   - The controller CSS is attached here, as author sheets the page cannot
+ *     touch (see "Controller sheets") — upstream's manifest CSS and adopted
+ *     stylesheets are out of the page's reach, too.
  */
 var VideoSpeedOverlay = {
 
@@ -225,7 +228,20 @@ var VideoSpeedOverlay = {
     if (!doc || doc.nodeType !== doc.DOCUMENT_NODE || !doc.location) return;
     var win = doc.defaultView;
     var root = doc.documentElement;
-    if (!win || !root || this._bridges.has(doc)) return;
+    if (!win || !root) return;
+
+    // One injection per document *version*. document.open()/write() gives the
+    // document a new root and fires DOMContentLoaded again; Gecko also gives
+    // it a fresh window (Chrome keeps the old one, so upstream's scripts
+    // survive), which takes the injected scripts with it — inject again, as
+    // the 0.10.2 port did. A document disabled while open stays reload-only.
+    var previous = this._bridges.get(doc);
+    if (previous) {
+      if (previous.root === root || previous.disabledForDocument) return;
+      previous.active = false;
+      this._removeSheets(previous);
+      this._bridges.delete(doc);
+    }
 
     // Upstream content_scripts.matches: http, https and file only (about:
     // frames fail closed there; here they are simply never injected).
@@ -239,7 +255,10 @@ var VideoSpeedOverlay = {
     var settings = this._readSettings();
     if (settings.enabled === false || this._isSiteDisabled(settings, href)) return;
 
-    var bridge = { doc: doc, win: win, active: false, disabledForDocument: false };
+    // `root` is the element both sides talk on for this document's life, even
+    // if the page later swaps in another <html> (upstream's bridge and page
+    // scripts capture document.documentElement once, too).
+    var bridge = { doc: doc, win: win, root: root, active: false, disabledForDocument: false };
     this._bridges.set(doc, bridge);
     this._attachBridge(bridge);
     this._injectScripts(doc);
@@ -271,7 +290,7 @@ var VideoSpeedOverlay = {
 
   _attachBridge: function(bridge) {
     var self = this;
-    var root = bridge.doc.documentElement;
+    var root = bridge.root;
     // wantsUntrusted: page-dispatched CustomEvents are untrusted.
     var onRequest = function() {
       root.removeEventListener("VSC_REQUEST_SETTINGS", onRequest, false);
@@ -288,7 +307,7 @@ var VideoSpeedOverlay = {
       var evt = new bridge.win.CustomEvent(type, {
         detail: Components.utils.cloneInto(detail, bridge.win),
       });
-      bridge.doc.documentElement.dispatchEvent(evt);
+      bridge.root.dispatchEvent(evt);
     } catch(e) {
       // The document went away (dead object) — nothing to deliver to.
     }
@@ -319,6 +338,8 @@ var VideoSpeedOverlay = {
     }
 
     bridge.active = true;
+    // Upstream's initialize() injects the controller CSS once settings load.
+    this._loadSheets(bridge, settings);
     this._dispatch(bridge, "VSC_SETTINGS_READY", {
       settings: publicSettings,
       hostname: bridge.doc.location.hostname.replace(/^www\./, ""),
@@ -334,6 +355,86 @@ var VideoSpeedOverlay = {
     if (typeof speed === "number" && isFinite(speed)) {
       VSCPrefs.set("lastSpeed", Math.min(Math.max(speed, this._SPEED_MIN), this._SPEED_MAX));
     }
+  },
+
+  // --- Controller sheets -------------------------------------------------
+  // Upstream's CSS is out of the page's reach: manifest CSS and adopted
+  // stylesheets are not DOM nodes. The UXP counterpart is an author sheet
+  // attached to the document through nsIDOMWindowUtils (as Firefox's own
+  // WebExtensions did for content-script CSS): not a DOM node either, so a
+  // page cannot remove, block or disable it — the VORAPIS V3 YouTube layout
+  // sweeps every <style> — and page CSP does not govern it. The text comes
+  // from the extension's own src/styles/controller-css-defaults.js and the
+  // user's customCSS pref, never from anything the page sends.
+
+  _cssBuilders: null,
+
+  _css: function() {
+    if (!this._cssBuilders) {
+      var scope = { window: {} };
+      Services.scriptloader.loadSubScript(
+        "resource://videospeed/styles/controller-css-defaults.js", scope, "UTF-8");
+      this._cssBuilders = scope.window.VSC;
+    }
+    return this._cssBuilders;
+  },
+
+  _windowUtils: function(bridge) {
+    return bridge.win.QueryInterface(Components.interfaces.nsIInterfaceRequestor)
+                     .getInterface(Components.interfaces.nsIDOMWindowUtils);
+  },
+
+  _addSheet: function(bridge, css) {
+    var uri = "data:text/css;charset=utf-8," + encodeURIComponent(css);
+    try {
+      var utils = this._windowUtils(bridge);
+      utils.loadSheetUsingURIString(uri, utils.AUTHOR_SHEET);
+      return uri;
+    } catch(e) {
+      Components.utils.reportError("VSC: could not attach the controller CSS: " + e);
+      return null;
+    }
+  },
+
+  _removeSheet: function(bridge, uri) {
+    if (!uri) return;
+    try {
+      var utils = this._windowUtils(bridge);
+      utils.removeSheetUsingURIString(uri, utils.AUTHOR_SHEET);
+    } catch(e) {
+      // The document went away, and its sheets with it.
+    }
+  },
+
+  // Upstream injectControllerCSS(): the controller sheet (inner controller
+  // CSS + host and site rules for this host), then the user's custom sheet.
+  _loadSheets: function(bridge, settings) {
+    if (bridge.sheets) return;
+    bridge.sheets = {
+      controller: this._addSheet(bridge,
+        this._css().controllerSheetCSS(bridge.doc.location.hostname)),
+      custom: null,
+    };
+    this._setCustomSheet(bridge, settings.customCSS);
+  },
+
+  // Upstream setupCSSLiveUpdates(): replace the custom sheet. A newly loaded
+  // sheet comes after the controller sheet, keeping the cascade order.
+  _setCustomSheet: function(bridge, customCSS) {
+    if (!bridge.sheets) return;
+    this._removeSheet(bridge, bridge.sheets.custom);
+    bridge.sheets.custom = null;
+    var css = this._css().customSheetCSS(customCSS);
+    if (css) {
+      bridge.sheets.custom = this._addSheet(bridge, css);
+    }
+  },
+
+  _removeSheets: function(bridge) {
+    if (!bridge.sheets) return;
+    this._removeSheet(bridge, bridge.sheets.controller);
+    this._removeSheet(bridge, bridge.sheets.custom);
+    bridge.sheets = null;
   },
 
   // Call `callback(bridge)` for every bridged document in `win` and all of
@@ -372,6 +473,7 @@ var VideoSpeedOverlay = {
         if (!enabled) {
           bridge.active = false;
           self._dispatch(bridge, "VSC_MESSAGE", { type: "VSC_TEARDOWN" });
+          self._removeSheets(bridge);
         }
       });
       return;
@@ -380,6 +482,15 @@ var VideoSpeedOverlay = {
     // Never relayed: the legacy blacklist (upstream) and the raw site rules
     // (UXP privacy). Keys outside the settings schema have nothing to relay.
     if (prefKey === "blacklist" || prefKey === "siteRules" || !(prefKey in settings)) return;
+
+    // Upstream's setupCSSLiveUpdates(), done here with the sheets.
+    if (prefKey === "customCSS") {
+      this._forEachBridge(function(bridge) {
+        if (bridge.active) {
+          self._setCustomSheet(bridge, settings.customCSS);
+        }
+      });
+    }
 
     var changes = {};
     changes[prefKey] = { newValue: settings[prefKey] };
